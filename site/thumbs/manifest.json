@@ -54,5 +54,9 @@
   "14": {
     "file": "thumbs/astra-261118-14.webp",
     "kind": "real"
+  },
+  "16": {
+    "file": "thumbs/placeholder-16.svg",
+    "kind": "placeholder"
   }
 }
