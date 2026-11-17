@@ -1,0 +1,2085 @@
+<!DOCTYPE html>
+<html lang="ja"><head>
+<meta name="robots" content="noindex,nofollow"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"><meta name="theme-color" content="#152c36"><title>春巻きの台</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;overscroll-behavior:none;touch-action:none;background:#25373c}
+canvas{display:block;width:100%;height:100%;touch-action:none;-webkit-touch-callout:none}
+#safe{position:fixed;pointer-events:none;inset:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left)}
+</style></head><body><canvas aria-label="春巻きの台"></canvas><div id="safe"></div><script>
+(function kitchen() {
+  const canvas = document.querySelector("canvas"), safe = document.querySelector("#safe");
+  const gl = canvas.getContext("webgl", { alpha: false, antialias: true, depth: true, powerPreference: "high-performance" }) || canvas.getContext("experimental-webgl");
+  if (!gl)
+    return;
+  const PI = Math.PI, TAU = 2 * PI, { sin, cos, abs, exp } = Math;
+  const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x)), mix = (a, b, t) => a + (b - a) * t;
+  const smooth = (t) => (t = clamp(t), t * t * (3 - 2 * t));
+  const add = (a, b) => a.map((x, i) => x + b[i]), sub = (a, b) => a.map((x, i) => x - b[i]), mul = (a, s) => a.map((x) => x * s), dot = (a, b) => a.reduce((s, x, i) => s + x * b[i], 0);
+  const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]], unit = (a) => mul(a, 1 / (Math.hypot(...a) || 1));
+  const lerp3 = (a, b, t) => a.map((x, i) => mix(x, b[i], t));
+  function random(seed) {
+    return () => {
+      seed = Math.imul(seed, 1664525) + 1013904223 >>> 0;
+      return seed / 4294967296;
+    };
+  }
+  const rand = random(417);
+  function rgb(s) {
+    return [0, 2, 4].map((i) => parseInt(s.slice(i, i + 2), 16) / 255);
+  }
+  const tint = (c, v) => c.map((x) => x * v);
+  function matrix(a, b) {
+    let o = new Float32Array(16);
+    for (let j = 0;j < 4; j++)
+      for (let i = 0;i < 4; i++)
+        for (let k = 0;k < 4; k++)
+          o[j * 4 + i] += a[k * 4 + i] * b[j * 4 + k];
+    return o;
+  }
+  const ident = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+  function view(eye, to) {
+    let z = unit(sub(eye, to)), x = unit(cross([0, 1, 0], z)), y = cross(z, x);
+    return new Float32Array([x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, eye), -dot(y, eye), -dot(z, eye), 1]);
+  }
+  function projection(fov, aspect, n, f) {
+    let k = 1 / Math.tan(fov / 2);
+    return new Float32Array([k / aspect, 0, 0, 0, 0, k, 0, 0, 0, 0, (f + n) / (n - f), -1, 0, 0, 2 * f * n / (n - f), 0]);
+  }
+  function transform(x, y, z, ay = 0, ax = 0, s = 1) {
+    const a = cos(ay), b = sin(ay), c = cos(ax), d = sin(ax);
+    return new Float32Array([s * a, 0, -s * b, 0, s * b * d, s * c, s * a * d, 0, s * b * c, -s * d, s * a * c, 0, x, y, z, 1]);
+  }
+  function apply(m, p, w = 1) {
+    return [0, 1, 2].map((i) => m[i] * p[0] + m[i + 4] * p[1] + m[i + 8] * p[2] + m[i + 12] * w);
+  }
+  // Indexed batches share one vertex layout, including local material coordinates.
+
+  class Batch {
+    constructor() {
+      this.v = [];
+      this.i = [];
+      this.model = ident;
+      this.local = ident;
+      this.visible = true;
+      this.shadow = true;
+      this.vb = gl.createBuffer();
+      this.ib = gl.createBuffer();
+      this.dirty = true;
+    }
+    clear() {
+      this.v.length = 0;
+      this.i.length = 0;
+      this.dirty = true;
+    }
+    vertex(p, n, c, m, uv = p) {
+      let a = this.local === ident ? p : apply(this.local, p), b = this.local === ident ? n : unit(apply(this.local, n, 0));
+      this.v.push(...a, ...b, ...c, m, ...uv);
+      return this.v.length / 13 - 1;
+    }
+    upload() {
+      if (!this.dirty)
+        return;
+      this.count = this.i.length;
+      gl.bindBuffer(gl.ARRAY_BUFFER, this.vb);
+      gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(this.v), this.immutable ? gl.STATIC_DRAW : gl.DYNAMIC_DRAW);
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, this.ib);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(this.i), this.immutable ? gl.STATIC_DRAW : gl.DYNAMIC_DRAW);
+      this.dirty = false;
+    }
+    dispose() {
+      gl.deleteBuffer(this.vb);
+      gl.deleteBuffer(this.ib);
+    }
+  }
+  function grid(b, nu, nv, fn, c, m, uv, closed = false) {
+    let base = b.v.length / 13, ps = [];
+    for (let j = 0;j <= nv; j++)
+      for (let i = 0;i <= nu; i++)
+        ps.push(fn(i / nu, j / nv));
+    const idx = (i, j) => j * (nu + 1) + i;
+    for (let j = 0;j <= nv; j++)
+      for (let i = 0;i <= nu; i++) {
+        let p = ps[idx(i, j)], u = i / nu, v = j / nv;
+        let l = ps[idx(closed && i === 0 ? nu - 1 : Math.max(0, i - 1), j)], r = ps[idx(closed && i === nu ? 1 : Math.min(nu, i + 1), j)], t = ps[idx(i, Math.max(0, j - 1))], h = ps[idx(i, Math.min(nv, j + 1))];
+        let ax = r[0] - l[0], ay = r[1] - l[1], az = r[2] - l[2], bx = h[0] - t[0], by = h[1] - t[1], bz = h[2] - t[2], nx = by * az - bz * ay, ny = bz * ax - bx * az, nz = bx * ay - by * ax, nl = 1 / (Math.hypot(nx, ny, nz) || 1), n = [nx * nl, ny * nl, nz * nl];
+        b.vertex(p, n, typeof c === "function" ? c(u, v, p) : c, m, uv ? uv(u, v, p) : p);
+        if (i && j) {
+          let a = base + idx(i - 1, j - 1), d = a + nu + 1;
+          b.i.push(a, d, a + 1, a + 1, d, d + 1);
+        }
+      }
+  }
+  function box(b, x, y, z, w, h, d, c, m = 0) {
+    let p = [x, y, z], s = [w / 2, h / 2, d / 2];
+    for (let axis = 0;axis < 3; axis++)
+      for (let side of [-1, 1]) {
+        let a = (axis + 1) % 3, e = (axis + 2) % 3, n = [0, 0, 0];
+        n[axis] = side;
+        let j = b.v.length / 13;
+        for (let [u, v] of [[-1, -1], [1, -1], [1, 1], [-1, 1]]) {
+          let q = [...p];
+          q[axis] += s[axis] * side;
+          q[a] += s[a] * u;
+          q[e] += s[e] * v;
+          b.vertex(q, n, c, m, q);
+        }
+        b.i.push(j, j + 1, j + 2, j, j + 2, j + 3);
+      }
+  }
+  function ell(b, p, s, c, m = 0, rz = 0, ry = 0, nu = 18, nv = 11) {
+    grid(b, nu, nv, (u, v) => {
+      let a = TAU * u, t = PI * (0.001 + 0.998 * v), x = s[0] * sin(t) * cos(a), y = s[1] * cos(t), z = s[2] * sin(t) * sin(a), xx = x * cos(rz) - y * sin(rz);
+      return [p[0] + xx * cos(ry) + z * sin(ry), p[1] + x * sin(rz) + y * cos(rz), p[2] - xx * sin(ry) + z * cos(ry)];
+    }, c, m, null, true);
+  }
+  function lathe(b, x, y, z, profile, c, m = 0, segments = 52, sz = 1, wave = 0) {
+    grid(b, segments, profile.length - 1, (u, v) => {
+      let [r, h] = profile[Math.round(v * (profile.length - 1))], a = TAU * u;
+      r *= 1 + wave * cos(14 * a);
+      return [x + r * cos(a), y + h, z + r * sin(a) * sz];
+    }, c, m, (u, v, p) => [u, v, p[1]], true);
+  }
+  function pipe(b, pts, rs, c, m = 0, sides = 8) {
+    let prev = [1, 0, 0], frames = [];
+    for (let i = 0;i < pts.length; i++) {
+      let t = unit(sub(pts[Math.min(pts.length - 1, i + 1)], pts[Math.max(0, i - 1)]));
+      if (abs(dot(prev, t)) > 0.98)
+        prev = [0, 0, 1];
+      let v = unit(cross(t, prev)), h = unit(cross(v, t));
+      frames.push([h, v]);
+      prev = h;
+    }
+    grid(b, sides, pts.length - 1, (u, v) => {
+      let j = Math.round(v * (pts.length - 1)), r = typeof rs === "number" ? rs : rs[j], a = u * TAU;
+      return add(pts[j], add(mul(frames[j][0], r * cos(a)), mul(frames[j][1], r * sin(a))));
+    }, c, m, null, true);
+  }
+  function ring(b, x, y, z, r, t, c, m = 0, sz = 1, n = 64) {
+    let pts = [];
+    for (let i = 0;i <= n; i++) {
+      let a = TAU * i / n;
+      pts.push([x + r * cos(a), y, z + sz * r * sin(a)]);
+    }
+    pipe(b, pts, t, c, m, 7);
+  }
+  function arc(b, p0, p1, p2, r, c, m = 0, n = 12) {
+    let pts = [];
+    for (let i = 0;i <= n; i++) {
+      let t = i / n;
+      pts.push(p0.map((x, k) => (1 - t) ** 2 * x + 2 * (1 - t) * t * p1[k] + t * t * p2[k]));
+    }
+    pipe(b, pts, r, c, m);
+  }
+  const vs = `attribute vec3 P,N,C,U;attribute float M;uniform mat4 model,VP,lightVP;varying vec3 pos,nor,col,uv;varying float mat;varying vec4 lightPos;
+void main(){vec4 w=model*vec4(P,1.);pos=w.xyz;nor=mat3(model)*N;col=C;uv=U;mat=M;gl_Position=VP*w;lightPos=lightVP*w;}`;
+  const fs = `precision highp float;
+varying vec3 pos,nor,col,uv;varying float mat;varying vec4 lightPos;
+uniform vec3 eye;uniform sampler2D depthMap;uniform float time,heat,opacity; uniform vec2 viewport;uniform vec3 focus;uniform float cue;
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*4375.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+1.),f.x),f.y);}
+float shadow(){vec3 q=lightPos.xyz/lightPos.w*.5+.5;if(min(q.x,q.y)<0.||max(q.x,q.y)>1.)return 1.;float sum=0.;for(int i=0;i<9;i++){float a=float(i)*2.4;vec2 o=vec2(cos(a),sin(a))*sqrt(float(i))*.00085;vec4 d=texture2D(depthMap,q.xy+o);sum+=step(q.z-.0018,d.r+d.g/255.);}return sum/9.;}
+void main(){vec3 n=normalize(nor),v=normalize(eye-pos);if(dot(n,v)<0.)n=-n;
+vec3 c=col;float gloss=.10,shine=35.,oc=1.;vec2 p=pos.xz;
+if(mat>.5&&mat<1.5){float grain=noise(p*95.);c*=.95+.045*noise(p*9.)+.05*grain;c+=vec3(.034,.027,.019)*noise(p*3.5);c-=.065*smoothstep(.74,.90,noise(p*85.));gloss=.16;}
+else if(mat>1.5&&mat<2.5){vec2 f=uv.xz;float threads=sin(f.x*530.)*sin(f.y*390.);float stripe=1.-smoothstep(.016,.025,abs(abs(f.x)-3.27));float hem=1.-smoothstep(.012,.023,abs(f.y-2.16));c*=.92+.045*threads+.08*noise(f*68.);c=mix(c,vec3(.83,.65,.49),.56*max(stripe,hem));vec2 tile=fract((f+vec2(f.y*.42,0.))*3.0)-.5;float woven=1.-smoothstep(.04,.14,abs(abs(tile.x)+abs(tile.y)-.37));c+=vec3(.047,.028,.021)*woven;gloss=.035;}
+else if(mat>2.5&&mat<3.5){float r=uv.y,a=uv.x*6.2831853;
+ vec3 milk=vec3(.85,.82,.67),gilt=vec3(.80,.62,.33);float cell=fract(uv.x*20.+.5)-.5;
+ vec2 q=vec2(cell*1.90,(r-.797)*5.65);float len=length(q),ang=atan(q.y,q.x);
+ float flower=1.-smoothstep(.253+.082*cos(ang*6.)-.012,.253+.082*cos(ang*6.)+.012,len);
+ float petalline=(1.-smoothstep(.030,.075,abs(sin(ang*3.))))*smoothstep(.070,.22,len);
+ c=mix(c,milk,flower*(1.-.64*petalline));c=mix(c,gilt,1.-smoothstep(.055,.080,len));
+ float vein=1.-smoothstep(.004,.009,abs(r-.814-.044*cos(a*20.)));
+ vec2 leaf=vec2((abs(cell)-.297)*9.8,(r-.805-.094*(abs(cell)-.29)*4.)*28.);
+ c=mix(c,milk,max(vein*.61,(1.-smoothstep(.70,.96,length(leaf)))*.82)*(1.-flower));
+ float chain=1.-smoothstep(.61,.97,length(vec2((fract(uv.x*100.+.5)-.5)*3.6,(r-.935)*98.)));
+ float line=1.-smoothstep(.002,.006,abs(r-.636));c=mix(c,gilt,max(chain*.87,line*.78));c*=.976+.035*noise(pos.xz*51.);
+ gloss=.46;shine=88.;}
+else if(mat>3.5&&mat<4.5){vec2 f=uv.xz;float grain=noise(f*86.),blotch=noise(f*4.6),pore=smoothstep(.77,.98,noise(f*51.));c*=.93+.069*blotch+.032*grain-.085*pore;float fiber=sin(f.x*104.+noise(f*8.)*5.);c+=.012*fiber; n=normalize(n+vec3((grain-.5)*.073,0.,(noise(f*47.)-.5)*.08));gloss=.11;}
+else if(mat>4.5&&mat<5.5){c*=.85+.20*noise(uv.xy*vec2(5.,180.)+uv.zz*vec2(.4,25.));gloss=.18;}
+else if(mat>5.5&&mat<6.5){c*=.98+.035*noise(uv.xy*12.);gloss=.46;shine=66.;}
+else if(mat>6.5&&mat<7.5){gloss=.115;shine=18.;}
+else if(mat>7.5&&mat<8.5){c*=.88+.15*noise(uv.xy*vec2(110.,12.));gloss=.27;}
+else if(mat>8.5&&mat<9.5){c*=.96+.055*noise(uv.xy*90.);gloss=.04;}
+else if(mat>9.5&&mat<10.5){n=normalize(n+heat*vec3(.035*sin(p.x*18.+time*3.+cos(p.y*14.)),0.,.051*cos(length(p-vec2(2.72,-2.15))*29.-time*3.)));float rad=length(p-vec2(2.72,-2.15));float wave=noise(p*3.+.10*time*heat);c*=.69+.29*wave+.11*smoothstep(.72,.94,rad);vec3 rr=reflect(-v,n);float glints=pow(max(0.,sin(p.x*16.+sin(p.y*10.+time*heat)*.7)),12.)*pow(max(0.,cos(p.y*10.+wave*2.)),6.);c+=vec3(.21,.15,.045)*glints*(.35+.65*heat);c+=vec3(.21,.16,.07)*smoothstep(.55,.79,sin(rr.x*7.+wave*.6))*smoothstep(.0,.9,rr.z);gloss=.76;shine=62.;}
+else if(mat>10.5&&mat<11.5){vec3 ref=reflect(-v,n);c*=.65+.42*smoothstep(-.6,.6,ref.y)+.24*smoothstep(.3,.8,sin(ref.x*12.+ref.z*3.));gloss=.8;shine=80.;}
+else if(mat>11.5&&mat<12.5){c*=.92+.10*noise(uv.xz*30.);gloss=.34;}
+else if(mat>12.5&&mat<13.5){gloss=1.;shine=95.;}
+else if(mat>14.5&&mat<15.5){float a=uv.x*6.28318; float band=1.-smoothstep(.016,.034,abs(uv.y-.65));float fine=1.-smoothstep(.007,.019,abs(uv.y-.59));float leaves=smoothstep(.72,.86,cos(a*18.+uv.y*24.))*smoothstep(.26,.32,uv.y)*(1.-smoothstep(.49,.54,uv.y));c=mix(c,vec3(.12,.29,.39),max(max(band,fine),leaves*.84));gloss=.48;shine=80.;}
+else if(mat>16.5&&mat<17.5){vec2 f=uv.xz*vec2(1.,1.1);float h=uv.y,cloud=noise(f*6.7)*.59+noise(f*16.)*.28+noise(f*43.)*.13;float spot=smoothstep(.54,.77,cloud)*h;
+ c*=vec3(1.-.17*spot,1.-.44*spot,1.-.54*spot);c+=vec3(.045,.026,.014)*(noise(f*118.)-.5);float crater=smoothstep(.74,.91,noise(f*74.));c-=vec3(.075,.061,.033)*crater;gloss=.15+.13*h;shine=60.;}
+else if(mat>17.5&&mat<18.5){vec2 q=uv.xy;float cheek=exp(-90.*(pow(abs(q.x)-.236,2.)+pow(q.y+.102,2.)))*smoothstep(.12,.27,uv.z);
+ c=mix(c,vec3(.86,.50,.42),.29*cheek);gloss=.076;shine=18.;}
+else if(mat>15.5&&mat<16.5){gl_FragColor=vec4(c,1.);return;}
+vec3 l=normalize(vec3(-3.2,7.,3.0)-pos*.31);float nl=max(dot(n,l),0.),s=shadow();float fill=max(dot(n,normalize(vec3(2.,2.,-3.))),0.);
+vec3 lit=c*(vec3(.42,.45,.49)+nl*(.22+.53*s)*vec3(1.12,.96,.79)+.13*fill*vec3(.69,.84,1.));vec3 h=normalize(l+v);float spec=pow(max(dot(n,h),0.),shine)*gloss*s;
+vec3 refl=reflect(-v,n);float band=exp(-pow((refl.x+.35)*4.6,2.))*smoothstep(.1,.7,refl.y);
+lit+=vec3(1.,.88,.67)*spec+.11*gloss*band;float fog=smoothstep(11.,25.,distance(eye,pos));lit=mix(lit,vec3(.19,.24,.27),fog*.30);float pool=exp(-.036*dot(pos.xz-vec2(-.9,.8),pos.xz-vec2(-.9,.8))-.041*pos.y*pos.y);
+ lit*=mix(vec3(.55,.60,.70),vec3(1.01,.97,.91),pool);
+ if(mat>0.5&&mat<2.5&&pos.y<.12){float contact=exp(-2.8*dot((p-vec2(0.,.5))/vec2(2.04,1.48),(p-vec2(0.,.5))/vec2(2.04,1.48)));contact+=exp(-5.*dot(p-vec2(-2.1,-1.53),p-vec2(-2.1,-1.53)));lit*=1.-.27*min(1.,contact);}
+ lit+=vec3(.16,.10,.041)*cue*exp(-6.4*dot(pos-focus,pos-focus))*(.4+.6*max(0.,n.y));vec2 screenUV=gl_FragCoord.xy/viewport*2.-1.;lit*=1.-.063*dot(screenUV,screenUV);lit=lit/(.88+.16*lit);
+ gl_FragColor=vec4(lit,opacity);}
+`;
+  function program(v, f) {
+    function shader(type, s) {
+      let a = gl.createShader(type);
+      gl.shaderSource(a, s);
+      gl.compileShader(a);
+      if (!gl.getShaderParameter(a, gl.COMPILE_STATUS))
+        throw Error(gl.getShaderInfoLog(a));
+      return a;
+    }
+    let p = gl.createProgram();
+    gl.attachShader(p, shader(gl.VERTEX_SHADER, v));
+    gl.attachShader(p, shader(gl.FRAGMENT_SHADER, f));
+    ["P", "N", "C", "M", "U"].forEach((s, i) => gl.bindAttribLocation(p, i, s));
+    gl.linkProgram(p);
+    if (!gl.getProgramParameter(p, gl.LINK_STATUS))
+      throw Error(gl.getProgramInfoLog(p));
+    let o = { p };
+    for (let s of ["model", "VP", "lightVP", "eye", "depthMap", "time", "heat", "opacity", "viewport", "focus", "cue"])
+      o[s] = gl.getUniformLocation(p, s);
+    return o;
+  }
+  const main = program(vs, fs), depth = program("attribute vec3 P;uniform mat4 model,VP;void main(){gl_Position=VP*model*vec4(P,1.);}", "precision highp float;void main(){float v=gl_FragCoord.z*255.;gl_FragColor=vec4(floor(v)/255.,fract(v),0.,1.);}");
+  const sm = 1024, fb = gl.createFramebuffer(), st = gl.createTexture(), rb = gl.createRenderbuffer();
+  gl.bindTexture(gl.TEXTURE_2D, st);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, sm, sm, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+  for (let k of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER])
+    gl.texParameteri(gl.TEXTURE_2D, k, gl.NEAREST);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, st, 0);
+  gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+  gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, sm, sm);
+  gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  const lightVP = matrix(projection(0.99, 1, 2, 29), view([-4.8, 10.5, 4.5], [0, 0, -0.4]));
+  gl.enable(gl.DEPTH_TEST);
+  function draw(b, pr) {
+    if (!b.visible)
+      return;
+    b.upload();
+    if (!b.count)
+      return;
+    gl.bindBuffer(gl.ARRAY_BUFFER, b.vb);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, b.ib);
+    let offsets = [0, 3, 6, 9, 10], sizes = [3, 3, 3, 1, 3];
+    for (let i = 0;i < (pr === depth ? 1 : 5); i++) {
+      gl.enableVertexAttribArray(i);
+      gl.vertexAttribPointer(i, sizes[i], gl.FLOAT, false, 52, offsets[i] * 4);
+    }
+    gl.uniformMatrix4fv(pr.model, false, b.model);
+    gl.drawElements(gl.TRIANGLES, b.count, gl.UNSIGNED_SHORT, 0);
+  }
+  const batches = [], clearBatches = [];
+  function group(transparent = false) {
+    let b = new Batch;
+    (transparent ? clearBatches : batches).push(b);
+    return b;
+  }
+  const room = group(), ware = group(), details = group(), greens = group(), glass = group(true);
+  const cream = rgb("e9e4d1"), navy = rgb("193d57"), blue = rgb("356479"), gold = rgb("c29a55"), metal = rgb("c7ced0"), wood = rgb("85532f"), skin = rgb("e3aa86");
+  const vegColors = ["dd6923", "8d5737", "b19b63", "658149", "70402c", "d4b77c"].map(rgb);
+  const plateZ = 0.5, baseY = 0.224, bowlP = [-2.1, 0, -1.53], potP = [2.72, 0, -2.15], trayP = [-2.95, 0, 0.75], pasteP = [2.98, 0, 0.7];
+  const world = (x, y, z) => [x, baseY + y, z + plateZ];
+  function porcelain(b, x, y, z, r, h, col = cream, pattern = true) {
+    let prof = [[0.03, 0], [0.39, 0], [0.43, 0.045], [0.44, 0.1], [0.62, 0.18], [0.77, 0.36], [0.91, 0.66], [1, 0.93], [1.005, 0.99], [0.979, 1.01], [0.95, 0.94], [0.86, 0.66], [0.72, 0.4], [0.52, 0.24], [0.2, 0.19], [0.005, 0.19]].map(([a, v]) => [a * r, h * v]);
+    lathe(b, x, y, z, prof, col, pattern ? 15 : 6);
+    ring(b, x, y + h * 0.987, z, r * 0.989, r * 0.012, pattern ? navy : gold, 6);
+  }
+  // Compact tiled room, dark casement and the kitchen's warm brass fixtures.
+  box(room, 0, -0.2, 0.04, 16, 0.4, 5.32, rgb("d6c6a5"), 1);
+  box(room, 0, -0.2, -4.45, 16, 0.4, 1.58, rgb("c3b8a1"), 1);
+  box(room, 3.56, -0.2, -2.99, 3.03, 0.4, 0.79, rgb("d6c6a5"), 1);
+  box(room, -4.63, -0.2, -3.04, 3.1, 0.4, 1.29, rgb("d6c6a5"), 1);
+  box(room, 0, -1.24, -4.48, 16, 2.08, 1.47, rgb("657878"), 5);
+  box(room, -7.25, 1.9, -3.07, 0.24, 8, 6, rgb("90a3a2"), 1);
+  box(room, 0, -1.18, 2.56, 15, 1.88, 0.17, rgb("49666b"), 5);
+  for (let i = -4;i <= 4; i++) {
+    box(room, i * 1.55, -1.04, 2.67, 1.48, 1.61, 0.11, rgb("6e8684"), 5);
+    box(room, i * 1.55, -0.5, 2.75, 0.5, 0.045, 0.055, gold, 11);
+  }
+  box(room, 0, 2.1, -5.48, 18, 6, 0.3, rgb("c8c8ba"));
+  for (let i = -11;i <= 11; i++)
+    for (let j = 0;j < 7; j++) {
+      let cols = ["668b9d", "91a8b4", "ccd2c5", "b8c8c6", "6c8c9c"];
+      let color = cols[Math.abs(i * 7 + j * 3) % 5];
+      box(room, i * 0.758, 0.25 + j * 0.63, -5.295, 0.743, 0.617, 0.069, rgb(color), 6);
+    }
+  box(room, 0, 2.65, -5.14, 4.8, 3, 0.23, rgb("343f40"), 5);
+  box(room, 0, 2.7, -4.995, 4.52, 2.73, 0.05, rgb("1c3541"));
+  for (let x of [-2.31, 0, 2.31])
+    box(room, x, 2.73, -4.87, 0.097, 2.89, 0.12, rgb("8a7358"), 5);
+  for (let y of [1.28, 2.6, 4.16])
+    box(room, 0, y, -4.87, 4.7, 0.09, 0.12, rgb("8a7358"), 5);
+  box(room, 0, 1.21, -4.83, 4.96, 0.13, 0.48, rgb("b99e75"), 5);
+  function jar(b, x, z, r, h, c) {
+    lathe(b, x, 0, z, [[0.01, 0], [r * 0.82, 0], [r, 0.08], [r, h * 0.79], [r * 0.9, h * 0.89], [r * 0.64, h * 0.93], [r * 0.62, h]], c, 6);
+    lathe(b, x, h, z, [[r * 0.62, 0], [r * 0.71, 0.04], [r * 0.69, 0.1], [0.01, 0.13]], wood, 5);
+    ring(b, x, h * 0.25, z, r + 0.004, 0.015, blue);
+  }
+  jar(ware, -4.05, -3.74, 0.37, 0.85, cream);
+  jar(ware, -3.27, -3.78, 0.31, 0.63, rgb("839e9a"));
+  function leafBlade(b, p, q, w, c, tilt) {
+    let d = sub(q, p), along = unit(d), right = unit(cross(along, [0, 0, 1])), lift = mul(unit(cross(right, along)), w * 0.17);
+    grid(b, 6, 9, (u, v) => {
+      let across = u * 2 - 1, f = sin(PI * v) ** 0.84;
+      let a = lerp3(p, q, v);
+      return add(a, add(mul(right, across * w * f), mul(lift, f * (1 - across * across) + across * tilt)));
+    }, (u, v) => tint(c, 0.9 + 0.12 * (1 - abs(2 * u - 1)) + 0.05 * v), 9);
+    pipe(b, [p, add(lerp3(p, q, 0.49), lift), q], [0.004, 0.004, 0.001], tint(c, 1.23), 9, 4);
+  }
+  function plant(x, y, z, s) {
+    porcelain(ware, x, y, z, s * 0.35, s * 0.44, rgb("a6b5a5"));
+    for (let i = 0;i < 13; i++) {
+      let a = i * 2.4, h = s * (0.42 + 0.46 * rand()), rr = s * (0.12 + 0.27 * rand()), end = [x + cos(a) * rr, y + h, z + sin(a) * rr];
+      let top = add(end, [s * cos(a) * 0.27, s * (0.2 + 0.2 * rand()), s * sin(a) * 0.25]);
+      pipe(greens, [[x, y + 0.28 * s, z], end], 0.009 * s, rgb("617243"), 0, 5);
+      leafBlade(greens, end, top, s * (0.07 + rand() * 0.05), rgb(["527746", "73925d", "416b42"][i % 3]), cos(a) * 0.3);
+    }
+  }
+  plant(-1.8, 1.29, -4.68, 0.85);
+  plant(4.07, 0, -3.55, 1.3);
+  function bottle(x, z, r, h) {
+    lathe(ware, x, 0, z, [[0.01, 0.01], [r * 0.8, 0.01], [r, 0.07], [r, h * 0.59], [r * 0.92, h * 0.65], [r * 0.39, h * 0.76], [r * 0.37, h * 0.93], [r * 0.45, h * 0.95], [r * 0.43, h]], rgb("b79957"), 13);
+    lathe(ware, x, h, z, [[r * 0.4, 0], [r * 0.38, 0.15], [0.01, 0.15]], wood, 5);
+    ring(ware, x, 0.105, z, r, 0.015, cream);
+  }
+  bottle(3.79, -2.85, 0.2, 1.03);
+  bottle(3.4, -3.3, 0.17, 1.21);
+  pipe(room, [[3.28, 2.82, -5.12], [6.82, 2.82, -5.12]], 0.032, gold, 11);
+  for (let i = 0;i < 4; i++) {
+    let x = 3.57 + i * 0.65;
+    arc(ware, [x, 2.83, -5.12], [x, 2.62, -4.91], [x, 2.55, -4.98], 0.024, gold, 11);
+    pipe(ware, [[x, 2.57, -4.98], [x + 0.025, 2.01, -4.95]], 0.044, wood, 5);
+    ell(ware, [x + 0.025, 1.89, -4.95], [0.114, 0.175, 0.042], i % 2 ? metal : wood, i % 2 ? 11 : 5);
+  }
+  // Woven plum runner with a stitched edge and small embroidered branches.
+  function clothPoint(x, z) {
+    let edge = clamp((z - 2.64) / 0.25);
+    return [x + 0.014 * sin(z * 5 + x * 0.9), 0.045 - 0.38 * edge * edge + 0.013 * cos(x * 8 + z) * (0.25 + edge) + 0.012 * sin(z * 5 + 0.6 * x), Math.min(z, 2.69) + 0.12 * sin(edge * 1.6)];
+  }
+  grid(room, 40, 33, (u, v) => clothPoint(mix(-3.46, 3.46, u), mix(-1.31, 2.89, v)), rgb("723b4c"), 2, (u, v) => [mix(-3.46, 3.46, u), 0, mix(-1.31, 2.89, v)]);
+  for (let side of [-1, 1]) {
+    for (let j = 0;j < 5; j++) {
+      let x = side * (2.71 + 0.09 * j), z = 1.33 + 0.17 * j;
+      let p = clothPoint(x, z);
+      p[1] += 0.013;
+      arc(details, [p[0] - 0.1 * side, p[1], p[2] - 0.18], p, [p[0] + 0.07 * side, p[1], p[2] + 0.12], 0.009, rgb("caab86"));
+      for (let k of [-1, 1]) {
+        ell(details, [p[0] + k * 0.073, p[1] + 0.003, p[2]], [0.086, 0.007, 0.029], rgb("be987c"), 9, 0, k * -0.62, 10, 5);
+      }
+    }
+  }
+  const plate = group();
+  function makePlate() {
+    const pr = [[0.002, 0.062, 0], [0.94, 0.064, 0.29], [1.48, 0.11, 0.45], [2.12, 0.16, 0.73], [2.69, 0.285, 1], [2.72, 0.321, 1], [2.687, 0.345, 1], [2.6, 0.34, 0.968], [2.46, 0.305, 0.914], [2.24, 0.25, 0.833], [2.03, 0.209, 0.754], [1.68, 0.181, 0.625], [1.34, 0.173, 0.5], [0.6, 0.172, 0.23], [0.001, 0.172, 0]];
+    grid(plate, 144, pr.length - 1, (u, v) => {
+      let [r, y] = pr[Math.round(v * (pr.length - 1))], a = u * TAU;
+      r *= 1 + 0.014 * cos(16 * a) * smooth(r / 2.7);
+      return [r * cos(a), y + 0.023, plateZ + r * 0.82 * sin(a)];
+    }, navy, 3, (u, v) => [u, pr[Math.round(v * (pr.length - 1))][2], 0], true);
+    for (let [r, y, t] of [[2.675, 0.369, 0.016], [2.574, 0.357, 0.01], [2.14, 0.254, 0.009]]) {
+      let points = [];
+      for (let i = 0;i <= 160; i++) {
+        let a = TAU * i / 160, rr = r * (1 + 0.014 * cos(16 * a) * smooth(r / 2.7));
+        points.push([rr * cos(a), y, plateZ + rr * 0.82 * sin(a)]);
+      }
+      pipe(plate, points, t, gold, 11, 6);
+    }
+  }
+  makePlate();
+  porcelain(ware, ...[bowlP[0], 0, bowlP[2]], 0.99, 0.69);
+  const vegetables = group(), bowlTop = group();
+  // A tapered, twisted ribbon is a discrete solid: carrot, cabbage or mushroom.
+  function strip(b, x, y, z, len, w, h, a, bend, tw, c) {
+    let ca = cos(a), sa = sin(a), kind = vegColors.indexOf(c);
+    if (kind === 2 || kind === 5) {
+      w *= 1.43;
+      h *= 0.68;
+      bend *= 1.38;
+    } else if (kind === 4) {
+      w *= 1.23;
+      h *= 0.78;
+      bend *= 1.45;
+    }
+    function vertex(u, v) {
+      let k = 2 * v - 1, t = TAU * u, fade = 0.76 + 0.24 * sin(v * PI), xx = k * len * 0.5;
+      let angle = t + tw * k, side = bend * (1 - k * k) + 0.024 * sin(v * 7 + tw * 3) + cos(angle) * w * fade, up = sin(angle) * h * fade;
+      return [x + xx * ca - side * sa, y + up + 0.038 * (1 - k * k) + 0.03 * k * tw + 0.02 * sin(5 * v + tw * 3), z + xx * sa + side * ca];
+    }
+    grid(b, 6, 6, vertex, c, 12, null, true);
+    for (let v of [0, 1]) {
+      let verts = [];
+      for (let j = 0;j < 6; j++)
+        verts.push(b.vertex(vertex(j / 6, v), [ca * (2 * v - 1), 0, sa * (2 * v - 1)], tint(c, 1.09), 12));
+      for (let j = 1;j < 5; j++)
+        b.i.push(verts[0], verts[j], verts[j + 1]);
+    }
+  }
+  function fillBowl(seed) {
+    vegetables.clear();
+    bowlTop.clear();
+    let r = random(seed);
+    for (let i = 0;i < 127; i++) {
+      let a = r() * TAU, d = Math.sqrt(r()), x = d * cos(a) * 0.8, z = d * sin(a) * 0.77;
+      strip(i < 115 ? vegetables : bowlTop, bowlP[0] + x, 0.58 + 0.28 * (1 - d * d) + r() * 0.075 + (i >= 115 ? 0.048 : 0), bowlP[2] + z, 0.33 + r() * 0.53, 0.034 + r() * 0.038, 0.023 + r() * 0.027, r() * PI, 0.03 + r() * 0.1, r() * 2 - 1, vegColors[Math.floor(r() * 6)]);
+    }
+  }
+  fillBowl(130);
+  porcelain(ware, pasteP[0], 0.06, pasteP[2], 0.39, 0.31, cream);
+  lathe(ware, pasteP[0], 0.275, pasteP[2], [[0.001, 0.024], [0.32, 0.025], [0.345, 0.035]], rgb("dddac9"), 13);
+  for (let j = 0;j < 2; j++) {
+    let x = 2.04 + j * 0.14;
+    pipe(ware, [[x, 0.16, 0.2], [x + 0.61, 0.295, -1.52]], [0.025, 0.044], rgb("9c663b"), 5, 10);
+    pipe(ware, [[x + 0.51, 0.272, -1.25], [x + 0.59, 0.293, -1.48]], 0.045, navy, 6, 10);
+  }
+  ell(ware, [2.49, 0.14, -0.94], [0.3, 0.11, 0.12], cream, 6, 0, 0.16);
+  // Silver draining tray and its raised wire rack.
+  function roundedTray(b, x, z, w, d) {
+    grid(b, 72, 6, (u, v) => {
+      let a = TAU * u, r = [0.01, 0.9, 0.96, 1, 1, 0.95, 0.01][Math.round(v * 6)], h = [0.061, 0.061, 0.09, 0.23, 0.255, 0.105, 0.105][Math.round(v * 6)];
+      return [x + w * Math.sign(cos(a)) * abs(cos(a)) ** 0.32 * r, h, z + d * Math.sign(sin(a)) * abs(sin(a)) ** 0.32 * r];
+    }, metal, 11, null, true);
+    for (let i = -5;i <= 5; i++)
+      pipe(b, [[x + i * w * 0.152, 0.145, z - d * 0.85], [x + i * w * 0.152, 0.145, z + d * 0.85]], 0.014, metal, 11);
+  }
+  roundedTray(ware, -4.64, 0.74, 1.7, 1.24);
+  lathe(ware, potP[0], 0, potP[2], [[0.01, 0.01], [0.91, 0.01], [1.03, 0.07], [1.04, 0.13], [0.93, 0.17]], rgb("30444a"), 11);
+  lathe(ware, potP[0], 0.15, potP[2], [[0.01, 0], [0.78, 0], [0.92, 0.13], [1.03, 0.54], [1.04, 0.72], [1, 0.75], [0.96, 0.7], [0.91, 0.3], [0.77, 0.14], [0.01, 0.12]], rgb("345459"), 6);
+  ring(ware, potP[0], 0.886, potP[2], 1.02, 0.032, metal, 11);
+  for (let s of [-1, 1])
+    arc(ware, [potP[0] + s * 0.97, 0.7, potP[2] - 0.2], [potP[0] + s * 1.56, 0.76, potP[2]], [potP[0] + s * 0.97, 0.7, potP[2] + 0.2], 0.057, rgb("424a47"), 11);
+  const oil = group(), skimmer = group(), bubbleBatch = group(), steam = group(true), dropBatch = group();
+  steam.opacity = 0.12;
+  function skimGeometry() {
+    for (let j = 1;j < 9; j++) {
+      let r = j * 0.079;
+      ring(skimmer, 0, 0.2 * (r / 0.632) ** 2, 0, r, 0.011, metal, 11, 0.68, 36);
+    }
+    for (let j = 0;j < 10; j++) {
+      let a = j * TAU / 10;
+      pipe(skimmer, [[0, 0, 0], [0.31 * cos(a), 0.049, 0.21 * sin(a)], [0.636 * cos(a), 0.2, 0.43 * sin(a)]], 0.012, metal, 11, 6);
+    }
+    pipe(skimmer, [[0.51, 0.15, -0.02], [0.82, 0.32, -0.13], [1.41, 0.54, -0.34]], 0.035, metal, 11);
+    pipe(skimmer, [[1.13, 0.44, -0.24], [1.8, 0.69, -0.49]], [0.064, 0.08], wood, 5, 12);
+    ring(skimmer, 1.78, 0.69, -0.49, 0.076, 0.012, gold, 11);
+  }
+  skimGeometry();
+  function jarGlass() {
+    let x = -3.8, z = -1.2;
+    lathe(glass, x, 0, z, [[0.01, 0.03], [0.29, 0.02], [0.31, 0.06], [0.33, 0.68], [0.324, 0.7], [0.302, 0.69], [0.283, 0.08], [0.01, 0.08]], rgb("99bebc"), 13, 40);
+    glass.opacity = 0.33;
+    ring(ware, x, 0.69, z, 0.319, 0.015, rgb("c1d2ca"), 13);
+    ring(ware, x, 0.065, z, 0.295, 0.021, rgb("abc2b7"), 13);
+  }
+  jarGlass();
+  // The window has a recessed view of branches, with a night sky behind the leaves.
+  const joinery = group(), garden = group(), lamp = group();
+  box(joinery, 0, -2.37, 1, 22, 0.22, 22, rgb("777c77"), 1);
+  for (let i = -7;i <= 7; i++)
+    for (let j = -1;j < 9; j++)
+      box(joinery, i * 1.2, -2.245, j * 1.2, 1.18, 0.028, 1.18, rgb((i + j) % 2 ? "7f8c88" : "9b9e8b"), 6);
+  box(joinery, 0, -2.02, 2.43, 15, 0.27, 0.22, rgb("536166"), 5);
+  box(joinery, 0, -0.065, 2.68, 16, 0.095, 0.055, rgb("a58963"), 5);
+  for (let i = -4;i < 5; i++) {
+    for (let s of [-1, 1])
+      box(joinery, i * 1.55 + s * 0.64, -1.03, 2.742, 0.048, 1.37, 0.022, rgb("768985"), 5);
+    for (let yy of [-0.37, -1.7])
+      box(joinery, i * 1.55, yy, 2.746, 1.31, 0.05, 0.022, rgb("788e88"), 5);
+  }
+  box(joinery, 0, 4.95, -5.31, 18, 1.64, 0.2, rgb("a5ac9e"), 1);
+  box(joinery, 0, 4.23, -5.16, 17, 0.115, 0.25, rgb("786e59"), 5);
+  function branch(x, y, z, w, h, tilt) {
+    let pts = [];
+    for (let i = 0;i < 8; i++) {
+      let v = i / 7;
+      pts.push([x + tilt * v + 0.1 * sin(v * 4), y + h * v, z + 0.019 * v]);
+    }
+    pipe(garden, pts, pts.map((_, i) => 0.024 * (1 - i / 9)), rgb("454f3c"), 5, 6);
+    for (let i = 1;i < 8; i++)
+      for (let s of [-1, 1]) {
+        let p = pts[i], e = [p[0] + s * w * (0.28 + rand() * 0.55), p[1] + 0.11 + rand() * 0.18, z + 0.035];
+        if (abs(e[0]) > 2.2 || e[1] > 4.05)
+          continue;
+        pipe(garden, [p, e], [0.009, 0.003], rgb("606746"), 5, 5);
+        for (let j = 1;j < 5; j++) {
+          let q = lerp3(p, e, j / 4), sign = j % 2 ? 1 : -1;
+          leafBlade(garden, q, add(q, [0.12 * sign, 0.088 + rand() * 0.06, 0.014]), 0.039 + rand() * 0.026, rgb(["65925d", "497958", "749867", "365b47"][Math.floor(rand() * 4)]), sign * 0.32);
+        }
+      }
+  }
+  for (let [x, y, w, h, a] of [[-2.03, 1.4, 0.46, 2.47, 0.25], [-1.75, 1.44, 0.46, 1.47, 0.36], [1.96, 1.49, 0.6, 2.49, -0.31], [1.79, 1.45, 0.54, 1.35, -0.45], [0.42, 1.39, 0.5, 0.8, 0.27]])
+    branch(x, y, -4.91, w, h, a);
+  for (let i = 0;i < 13; i++) {
+    let x = -1.48 + 0.21 * i, y = 1.66 + 0.11 * cos(i);
+    box(garden, x, y, -4.952, 0.028, 0.057, 0.007, rgb(i % 3 ? "d1b681" : "879c9b"), 16);
+  }
+  // A small enamel pendant has a turned brass fitting and a warm opal diffuser.
+  let lx = -3.14, lz = -3.67;
+  pipe(lamp, [[lx, 6.6, lz], [lx, 3.61, lz]], 0.021, rgb("50483a"), 8);
+  lathe(lamp, lx, 3.49, lz, [[0.095, 0], [0.1, 0.12], [0.063, 0.17], [0.06, 0.22], [0.012, 0.23]], gold, 11);
+  lathe(lamp, lx, 3, lz, [[0.43, 0.035], [0.58, 0], [0.61, 0.03], [0.58, 0.075], [0.4, 0.18], [0.31, 0.36], [0.18, 0.46], [0.09, 0.48], [0.01, 0.48]], rgb("365963"), 6);
+  lamp.model = transform(0, -0.52, 0.02);
+  ring(lamp, lx, 3.02, lz, 0.604, 0.022, gold, 11);
+  ell(lamp, [lx, 3.037, lz], [0.54, 0.083, 0.54], rgb("ffe5aa"), 16, 0, 0, 38, 14);
+  for (let side of [-1, 1]) {
+    let x = side * 3.33;
+    box(joinery, x, 1.74, -4.96, 1.43, 0.075, 0.5, rgb("9e8565"), 5);
+    for (let j = 0;j < 3; j++) {
+      let xx = x - 0.43 + 0.4 * j;
+      lathe(ware, xx, 1.785, -4.88, [[0.009, 0], [0.124, 0], [0.142, 0.24], [0.15, 0.302], [0.132, 0.306], [0.118, 0.265], [0.01, 0.06]], j === 1 ? blue : cream, 6, 30);
+      arc(ware, [xx + 0.13, 2.02, -4.88], [xx + 0.3, 1.93, -4.88], [xx + 0.13, 1.85, -4.88], 0.025, j === 1 ? blue : cream, 6);
+    }
+  }
+  for (let i = -7;i <= 7; i++) {
+    let x = i * 0.758;
+    if (abs(x) < 2.48)
+      continue;
+    for (let j of [1, 3]) {
+      let y = 0.25 + j * 0.63;
+      if ((i + j) % 2 === 0)
+        continue;
+      for (let k = 0;k < 4; k++) {
+        let a = k * PI / 2;
+        ell(details, [x + 0.066 * cos(a), y + 0.066 * sin(a), -5.249], [0.071, 0.034, 0.009], rgb("577d90"), 6, a, 0, 9, 6);
+      }
+      ell(details, [x, y, -5.241], [0.022, 0.022, 0.009], gold, 6, 0, 0, 8, 5);
+    }
+  }
+  const pickingSticks = group();
+  for (let s of [-1, 1])
+    pipe(pickingSticks, [[s * 0.028, -0.53, 0.38], [s * 0.059, -0.01, 0], [s * 0.073, 0.18, -0.15]], [0.014, 0.025, 0.028], rgb("976240"), 5, 9);
+  // The child's wooden step is tucked into the space behind the counter.
+  box(joinery, -2.26, -1.3, -2.84, 1, 0.11, 0.77, wood, 5);
+  for (let x of [-2.62, -1.89])
+    for (let z of [-3.1, -2.57])
+      box(joinery, x, -1.78, z, 0.087, 0.94, 0.087, wood, 5);
+  // Garlic, ginger and sliced carrot on the small preparation board.
+  const board = group();
+  board.local = transform(-3.9, 0.027, -2.21, -0.15);
+  grid(board, 52, 5, (u, v) => {
+    let a = TAU * u, r = [0.01, 0.96, 1, 1, 0.975, 0.01][Math.round(v * 5)], y = [0, 0, 0.035, 0.071, 0.086, 0.086][Math.round(v * 5)];
+    return [0.8 * Math.sign(cos(a)) * abs(cos(a)) ** 0.35 * r, y, 0.42 * Math.sign(sin(a)) * abs(sin(a)) ** 0.35 * r];
+  }, rgb("b9915f"), 5, null, true);
+  for (let i = 0;i < 8; i++) {
+    let a = TAU * i / 8;
+    ell(board, [-0.26 + 0.099 * cos(a), 0.2, 0.093 * sin(a)], [0.1, 0.113, 0.085], rgb(i % 2 ? "d8ccaa" : "e6dabc"), 4, 0.1 * cos(a), a, 12, 9);
+  }
+  pipe(board, [[-0.26, 0.24, 0], [-0.27, 0.33, 0], [-0.245, 0.41, 0.008]], [0.062, 0.044, 0.02], rgb("d2bc93"), 4, 9);
+  for (let i = 0;i < 3; i++) {
+    let x = 0.33 + i * 0.095, z = -0.12 + 0.07 * i;
+    lathe(board, x, 0.087 + i * 0.022, z, [[0.005, 0], [0.106, 0.004], [0.123, 0.012], [0.124, 0.059], [0.115, 0.068], [0.006, 0.068]], rgb("d7843e"), 12, 22, 0.82);
+    ring(board, x, 0.156 + i * 0.022, z, 0.056, 0.004, rgb("e49b55"), 12, 0.81, 20);
+  }
+  for (let i = 0;i < 4; i++)
+    ell(board, [0.15 + 0.062 * i, 0.155, 0.155 + 0.023 * sin(i * 2.2)], [0.073, 0.051, 0.064], rgb("b38a56"), 4, -0.24, 0, 10, 7);
+  const plum = rgb("643a43"), hair = rgb("42312b"), lip = rgb("ae6960");
+  function character(child) {
+    const body = group(), head = group(), arms = group(), scale = child ? 0.85 : 1.06, origin = child ? [-2.26, 0.16, -2.84] : [1.37, 0.07, -3.52], yaw = child ? 0.27 : -0.26;
+    const shoulder = child ? 1.18 : 1.51, neck = shoulder + 0.12, headY = neck + 0.42;
+    const shirt = child ? rgb("ead5b3") : rgb("d2c7aa"), apron = child ? rgb("a85d64") : rgb("496972"), strand = child ? rgb("49352c") : rgb("423531");
+    let torso = [[0.44, -0.45], [0.49, 0.12], [0.45, shoulder - 0.39], [0.49, shoulder - 0.12], [0.45, shoulder], [0.24, shoulder + 0.06], [0.165, shoulder + 0.07]];
+    lathe(body, 0, 0, 0, torso, shirt, 9, 40, 0.64);
+    grid(body, 30, 10, (u, v) => {
+      let a = mix(-1.31, 1.31, u), w = mix(0.49, 0.34, v);
+      return [sin(a) * w, mix(-0.02, shoulder - 0.12, v), cos(a) * (0.319 + 0.024 * cos(a * 5) * (1 - v)) + 0.013];
+    }, apron, 9);
+    for (let s of [-1, 1]) {
+      pipe(body, [[s * 0.29, shoulder - 0.24, 0.252], [s * 0.31, shoulder + 0.001, 0.203], [s * 0.31, shoulder + 0.015, -0.07]], 0.045, apron, 9);
+      ell(body, [s * 0.285, shoulder - 0.15, 0.251], [0.034, 0.034, 0.012], gold, 11);
+    }
+    arc(body, [-0.27, 0.52, 0.303], [0, 0.4, 0.38], [0.27, 0.52, 0.303], 0.011, tint(apron, 1.3), 9);
+    for (let i = 0;i < (child ? 8 : 4); i++) {
+      let x = 0.13 * sin(i * 2.4), y = shoulder - 0.32 - i * 0.049;
+      for (let k = 0;k < 5; k++)
+        ell(body, [x + 0.014 * cos(k * TAU / 5), y + 0.014 * sin(k * TAU / 5), 0.341], [0.013, 0.013, 0.007], cream, 9, 0, 0, 6, 4);
+    }
+    ell(body, [0, neck - 0.035, 0], [0.16, 0.22, 0.155], skin, 7);
+    // A sculpted face, with lowered eyes under a single fitted cap of hair.
+    grid(head, 42, 26, (u, v) => {
+      let a = u * TAU, t = PI * (0.003 + 0.994 * v), sy = cos(t), rr = sin(t), jaw = 0.9 + 0.1 * smooth((sy + 0.64) / 0.75);
+      return [0.439 * rr * cos(a) * jaw, 0.51 * sy, 0.368 * rr * sin(a) + 0.023 * (1 - sy) * Math.max(0, sin(a))];
+    }, skin, 18, null, true);
+    for (let s of [-1, 1])
+      ell(head, [s * 0.393, -0.034, 0.004], [0.083, 0.125, 0.085], skin, 7);
+    const eyeC = rgb("47342f");
+    for (let s of [-1, 1]) {
+      let x = s * 0.157;
+      ell(head, [x, -0.034, 0.365], [0.087, 0.039, 0.027], rgb("e6cdb7"), 7, -s * 0.045, 0, 16, 9);
+      ell(head, [x - s * 0.005, -0.042, 0.386], [0.038, 0.036, 0.014], eyeC, 8, 0, 0, 14, 8);
+      ell(head, [x - 0.011, -0.031, 0.401], [0.01, 0.01, 0.005], cream, 6, 0, 0, 7, 5);
+      arc(head, [x - 0.083, -0.031, 0.366], [x, 0.006, 0.404], [x + 0.081, -0.035, 0.366], 0.01, eyeC, 8);
+      arc(head, [x - 0.082, 0.055, 0.346], [x, 0.099, 0.363], [x + 0.078, 0.061, 0.332], 0.016, strand, 8);
+    }
+    ell(head, [0, -0.092, 0.356], [0.056, 0.063, 0.058], skin, 7);
+    arc(head, [-0.081, -0.202, 0.353], [0, -0.237, 0.366], [0.081, -0.202, 0.352], 0.01, lip, 7);
+    function hairP(u, v) {
+      let a = u * TAU, front = sin(a), edge = 1.62 - 0.46 * front + 0.24 * (1 - front * front) + 0.07 * sin(3 * a);
+      let t = 0.003 + v * edge;
+      return [0.461 * sin(t) * cos(a), 0.519 * cos(t) + 0.028, 0.397 * sin(t) * sin(a) - 0.013];
+    }
+    grid(head, 48, 20, hairP, strand, 8, null, true);
+    for (let i = 0;i < 23; i++) {
+      let pts = [];
+      for (let j = 0;j <= 9; j++) {
+        let v = 0.13 + j * 0.082, u = i / 23 + 0.095 * (1 - v);
+        let p = hairP(u, v);
+        pts.push([p[0] * 1.007, p[1] + 0.004, p[2] * 1.006]);
+      }
+      pipe(head, pts, 0.0045, rgb(child ? "624635" : "594439"), 8, 5);
+    }
+    for (let i = 0;i < (child ? 5 : 4); i++) {
+      let side = i < 3 ? -1 : 1, spread = i < 3 ? i : i - 3, end = side * (0.2 + spread * 0.063);
+      grid(head, 12, 14, (u, v) => {
+        let a = u * TAU, t = sin(PI * v) ** 0.72, xx = mix(0.067, end, smooth(v)) + 0.077 * t * cos(a), yy = mix(0.475, 0.15 + 0.025 * spread, v) + 0.053 * sin(PI * v) - 0.026 * cos(a) * t;
+        let front = 0.401 * Math.sqrt(Math.max(0.015, 1 - (xx / 0.461) ** 2 - ((yy - 0.02) / 0.528) ** 2));
+        return [xx, yy, front + 0.008 + 0.02 * sin(a) * t];
+      }, strand, 8, null, true);
+    }
+    if (child) {
+      for (let s of [-1, 1]) {
+        ell(head, [s * 0.35, -0.012, -0.2], [0.18, 0.18, 0.145], plum, 9);
+        ell(head, [s * 0.41, -0.145, -0.2], [0.17, 0.215, 0.15], strand, 8, s * 0.22);
+        ell(head, [s * 0.34, 0.075, -0.05], [0.052, 0.026, 0.12], gold, 11, s * 0.15);
+      }
+    } else {
+      ell(head, [0, 0.26, -0.36], [0.259, 0.22, 0.231], strand, 8);
+      ring(head, 0, 0.36, -0.33, 0.17, 0.025, rgb("a98654"), 9, 0.9);
+    }
+    for (let s of [-1, 1]) {
+      let foot = child ? -1.64 : -2.04;
+      limb(body, [s * 0.218, -0.31, 0], [s * 0.22, foot + 0.083, 0.015], 0.17, 0.113, child ? rgb("b5a394") : rgb("42575e"), 9);
+      ell(body, [s * 0.22, foot, 0.08], [0.145, 0.09, 0.224], rgb(child ? "965c52" : "746d60"), 5);
+    }
+    for (let s of [-1, 1]) {
+      ell(body, [s * 0.211, shoulder + 0.053, 0.143], [0.178, 0.045, 0.16], tint(shirt, 1.09), 9, s * 0.15);
+      if (child) {
+        for (let j of [-1, 1])
+          ell(head, [s * (0.393 + j * 0.049), 0.055, -0.119], [0.067, 0.047, 0.034], rgb("aa6268"), 9, 0.41 * j);
+        ell(head, [s * 0.39, 0.052, -0.086], [0.026, 0.029, 0.029], plum, 9);
+      } else {
+        ell(head, [s * 0.405, -0.112, 0.073], [0.024, 0.032, 0.022], gold, 11);
+      }
+    }
+    return { child, body, head, arms, origin, yaw, scale, shoulder, headY, shirt };
+  }
+  const girl = character(true), mom = character(false);
+  function limb(b, p, q, r0, r1, c, m) {
+    let d = sub(q, p), pts = [p, lerp3(p, q, 0.15), lerp3(p, q, 0.64), q];
+    pipe(b, pts, [r0 * 0.87, r0, r1 * 1.1, r1], c, m, 14);
+  }
+  function palm(b, at, dir, s) {
+    let f = unit(dir), ac = unit(cross(f, [0, 1, 0]));
+    if (Math.hypot(...ac) < 0.1)
+      ac = [1, 0, 0];
+    let base = at;
+    ell(b, base, [0.104 * s, 0.064 * s, 0.137 * s], skin, 7, 0, Math.atan2(f[0], f[2]), 15, 8);
+    for (let i = 0;i < 4; i++) {
+      let start = add(add(base, mul(ac, (i - 1.5) * 0.044 * s)), mul(f, 0.065 * s));
+      let len = (i === 1 ? 0.14 : 0.112) * s;
+      let mid = add(start, mul(f, len * 0.66)), end = add(start, mul(f, len));
+      end[1] -= 0.038 * s;
+      pipe(b, [start, mid, end], [0.029 * s, 0.027 * s, 0.018 * s], skin, 7, 8);
+      ell(b, end, [0.018 * s, 0.02 * s, 0.018 * s], skin, 7, 0, 0, 8, 5);
+    }
+    let a = add(base, mul(ac, -0.081 * s)), e = add(add(a, mul(ac, -0.052 * s)), mul(f, 0.068 * s));
+    pipe(b, [a, e], [0.039 * s, 0.027 * s], skin, 7, 9);
+  }
+  function pose(person, target, other, t) {
+    const { child, body, head, arms, origin, yaw, scale, shoulder, headY, shirt } = person;
+    let breath = sin(t * (child ? 1.62 : 1.16) + (child ? 0 : 2)) * 0.012;
+    let base = transform(origin[0], origin[1] + breath, origin[2], yaw, 0, scale);
+    body.model = base;
+    let look = clamp((target[0] - origin[0]) * 0.125, -0.34, 0.34);
+    head.model = matrix(base, transform(0, headY, 0, look, 0.025 + 0.025 * sin(t * 0.73)));
+    arms.clear();
+    for (let i = 0;i < 2; i++) {
+      let s = i ? 1 : -1;
+      let p = apply(base, [s * 0.405, shoulder - 0.05, 0.05]), goal = i ? target : other;
+      let shift = sub(goal, p), len = Math.hypot(...shift), armLength = child ? 1.42 : 1.78;
+      let wrist = len > armLength ? add(p, mul(shift, armLength / len)) : goal;
+      let mid = lerp3(p, wrist, 0.48);
+      mid[0] += s * 0.12;
+      mid[1] -= Math.min(0.36, 0.2 * len);
+      mid[2] -= 0.025;
+      let cuff = lerp3(p, mid, 0.91);
+      limb(arms, p, cuff, 0.19 * scale, 0.14 * scale, shirt, 9);
+      ell(arms, p, [0.184 * scale, 0.16 * scale, 0.16 * scale], shirt, 9);
+      pipe(arms, [lerp3(p, cuff, 0.79), cuff], [0.151 * scale, 0.148 * scale], tint(shirt, 1.08), 9, 14);
+      limb(arms, cuff, mid, 0.116 * scale, 0.117 * scale, skin, 7);
+      ell(arms, mid, [0.116 * scale, 0.112 * scale, 0.12 * scale], skin, 7, 0, 0, 12, 8);
+      limb(arms, mid, wrist, 0.117 * scale, 0.073 * scale, skin, 7);
+      let d = unit(sub(wrist, mid));
+      palm(arms, add(wrist, mul(d, 0.058 * scale)), [d[0], -0.19, d[2] + 0.25], scale);
+    }
+  }
+  const RX = 1.99, RZ = 1.73;
+  const paper = group(), filling = group(), scraps = group(), tearMark = group(), food = group();
+  const repairP = [2.55, 0.18, 1.78];
+  const scrapsCol = rgb("e5cb94");
+  for (let i = 0;i < 2; i++) {
+    scraps.local = transform(repairP[0] + 0.05 * i, repairP[1] - 0.1 + i * 0.016, repairP[2], -0.22 + i * 0.38);
+    grid(scraps, 5, 5, (u, v) => [(u - 0.5) * 0.43, 0.014 * sin(PI * u) + 0.028 * v ** 4, (v - 0.5) * 0.38], scrapsCol, 4);
+  }
+  scraps.local = ident;
+  let serial = 0, roll, archive = [], stage = "prep", clock = 0, age = 0, idle = 0, last = 0, frame = 0, drag = null, held = null, loosePick = false, impulse = 0, cueLift = 0, cueCorner = 0, shapeDirty = true, rollDirty = true;
+  let carry = 0, flipVelocity = 0, turns = 0, skimPos = [1.28, 0.27, -1.44], skimScale = 0.79, displayPos = [0, 0.5, plateZ], heat = 1, pour = 0, tilt = 0, tiltGoal = 0, meal = 0, chosen = null, guided = null;
+  function newRoll() {
+    let seed = ++serial * 92681 + Math.floor(Math.random() * 65535) >>> 0;
+    return { seed, groups: [], fold: [0, 0, 0], goals: [0, 0, 0], order: [], wind: 0, windGoal: 0, slack: 0.5, tension: 0.4, tear: null, repairAt: -9, patch: 0, wet: 0, sideHeat: [0, 0], angle: 0, cut: 0, open: 0, openGoal: 0, shelf: [0, 0], flipped: 0, placed: 0 };
+  }
+  function portion(x, z, kind = "mixed", small = false) {
+    let id = ++roll.placed, r = random(roll.seed + id * 521), list = [], count = (small ? 23 : 20) + Math.floor(r() * 5);
+    for (let i = 0;i < count; i++) {
+      let a = r() * TAU, d = Math.sqrt(r()), type = i === 0 ? 0 : kind === "carrot" ? r() < 0.69 ? 0 : 1 + Math.floor(r() * 5) : Math.floor(r() * 6);
+      list.push({ dx: d * cos(a) * 0.38, dz: d * sin(a) * 0.22, level: i % 4 === 0 ? r() * 0.12 : (1 - d * d) * 0.52 + r() * 0.43, type, len: 0.32 + r() * 0.49, w: 0.032 + r() * 0.033, h: 0.02 + r() * 0.019, angle: (r() - 0.5) * 1.45, bend: (r() - 0.4) * 0.17, tw: r() * 1.8 - 0.9 });
+    }
+    return { x, z, tx: x, tz: z, drop: 0, fall: 0, support: 1, supportSpeed: 0, impact: -9, settle: 1, list, mass: list.length / 18, kind, id, phase: r() * TAU };
+  }
+  function density(x, z, r = roll) {
+    let sum = 0;
+    for (let g of r.groups) {
+      let dx = x - edgeTuck(g.x, r), dz = z - g.z;
+      sum += g.mass * exp(-dx * dx / 0.198 - dz * dz / 0.125);
+    }
+    return 0.6 * (1 - exp(-sum * 0.69));
+  }
+  // Weight reaches the pastry after contact. The small damped wave travels away from the landing point.
+  function sheetLift(x, z, r = roll) {
+    let load = 0, wave = 0;
+    for (let g of r.groups) {
+      let dx = x - edgeTuck(g.x, r), dz = z - g.z, d2 = dx * dx + dz * dz;
+      load += g.mass * g.support * exp(-dx * dx / 0.26 - dz * dz / 0.19);
+      let t = clock - g.impact;
+      if (t >= 0 && t < 1.1) {
+        let distance = Math.sqrt(d2);
+        wave += 0.025 * exp(-t * 4.7 - 8 * (distance - 1.6 * t) ** 2) * sin(t * 19 - distance * 11);
+      }
+    }
+    return 0.235 * (1 - exp(-load * 0.72)) + wave;
+  }
+  function lineMass(x, r = roll) {
+    let sum = 0;
+    for (let g of r.groups) {
+      let dx = x - g.x;
+      sum += g.mass * exp(-dx * dx / 0.236);
+    }
+    return sum;
+  }
+  function getShape(r) {
+    let sum = 0, x = 0, z = 0, left = 9, right = -9;
+    for (let g of r.groups) {
+      sum += g.mass;
+      x += g.x * g.mass;
+      z += g.z * g.mass;
+      left = Math.min(left, g.x - 0.54);
+      right = Math.max(right, g.x + 0.54);
+    }
+    return { cx: x / (sum || 1), cz: z / (sum || 1), lo: Math.min(-0.57, left) - 0.1 * (1 - r.fold[1]), hi: Math.max(0.57, right) + 0.1 * (1 - r.fold[2]) };
+  }
+  function exposed(r, side) {
+    let m = 0;
+    for (let g of r.groups)
+      for (let s of g.list) {
+        if (s.type !== 0)
+          continue;
+        let end = side * (g.x + s.dx) + s.len * 0.43;
+        let fold = r.fold[side < 0 ? 1 : 2];
+        m = Math.max(m, (end - 0.83) * (1 - smooth((fold - 0.55) / 0.4)));
+      }
+    return clamp(m, 0, 0.36);
+  }
+  function edgeTuck(x, r) {
+    let f = r.fold[x < 0 ? 1 : 2];
+    let a = abs(x);
+    return Math.sign(x) * mix(a, Math.min(a, 0.59 + 0.16 * Math.tanh((a - 0.59) * 2.4)), smooth((f - 0.54) / 0.42) * smooth((a - 0.38) / 0.42));
+  }
+  function rollRadius(x, a, r, sh) {
+    let t = clamp((x - sh.lo) / (sh.hi - sh.lo)), end = 0.52 + 0.48 * smooth(Math.min(t, 1 - t) * 8);
+    let mass = lineMass(x, r);
+    let air = 0.045 + r.slack * 0.071, base = 0.102 + 0.198 * (1 - exp(-mass * 0.78)) + air;
+    let dy = 0;
+    for (let g of r.groups) {
+      let dx = x - g.x;
+      dy += (g.z - sh.cz) * g.mass * exp(-dx * dx / 0.236);
+    }
+    let lean = 0.045 * Math.tanh(dy) * sin(a);
+    let baked = mix(r.sideHeat[0], r.sideHeat[1], 0.5 + 0.5 * cos(a)), blister = r.slack * (0.025 + 0.053 * baked) * (0.5 + 0.5 * sin(x * 7.1 + cos(a * 3.3) + r.seed % 17)) ** 2;
+    return end * (base + blister + lean + 0.009 * sin(6 * a + x * 5) + 0.01 * sin(3 * a - x * 1.6));
+  }
+  // Each corner travels around its own fold line and collides with the current mound.
+  function sheetPoint(x, z, r = roll) {
+    let ox = x, oz = z, y = 0.02 + 0.013 * sin(x * 9 + z * 5) * cos(z * 7) + sheetLift(x, z, r);
+    let curl = abs(x / RX) ** 8 + abs(z / RZ) ** 8;
+    y += curl * (0.104 + 0.023 * sin(clock * 1.8) + 0.17 * cueLift * (cueCorner === 0 ? Math.max(0, z / RZ) : cueCorner === 1 ? Math.max(0, -x / RX) : cueCorner === 2 ? Math.max(0, x / RX) : Math.max(0, -z / RZ)));
+    let indices = [0, ...r.order.filter((i) => i !== 0)];
+    for (let i of [1, 2])
+      if (!indices.includes(i))
+        indices.push(i);
+    for (let i of indices) {
+      let f = r.fold[i];
+      if (f < 0.001)
+        continue;
+      let side = i === 1 ? -1 : 1, coord = i ? side * x : z, hinge = i ? 0.76 : 0.25, dist = coord - hinge;
+      if (dist <= 0)
+        continue;
+      let a = f * PI * (i ? 0.97 : 0.925) * smooth(dist / 0.28 + 0.38), p = hinge + dist * cos(a), lift = dist * sin(a) * 0.71;
+      if (i)
+        x = side * p;
+      else
+        z = p;
+      let contact = smooth(f * 1.68) * smooth(dist / 0.22);
+      y += lift + 0.02 * f * contact;
+      y = Math.max(y, (Math.max(density(x, z, r) * 1.04 + 0.112, envelope(x, z)) + 0.03 + 0.018 * i) * contact + lift * 0.16);
+    }
+    if (r.wind > 0.001) {
+      let sh = getShape(r), t = r.wind, xx = clamp(x, sh.lo, sh.hi), a = (oz / RZ + 1) * PI + 0.32 + 4.6 * t, rad = rollRadius(xx, a, r, sh), wave = smooth(t * (1.64 - 0.3 * oz / RZ));
+      y = mix(y, rad * (1 + cos(a)) + 0.022, wave) + sin(PI * t) * 0.085;
+      z = mix(z, sh.cz + rad * sin(a), wave);
+      x = mix(x, xx, wave);
+    }
+    return [x, baseY + y, plateZ + z];
+  }
+  const HF = 55, HZ = 43, envelopes = new Float32Array(HF * HZ);
+  function stampEnvelope() {
+    envelopes.fill(0.042);
+    for (let g of roll.groups) {
+      if (g === held)
+        continue;
+      let den = density(g.x, g.z);
+      for (let s of g.list) {
+        let ca = cos(s.angle), sa = sin(s.angle), gy = 0.043 + sheetLift(g.x + s.dx, g.z + s.dz) + g.drop + (den + 0.042) * s.level * 0.88, mid = edgeTuck(g.x + s.dx, roll), zz = g.z + s.dz;
+        for (let j = 0;j < 7; j++) {
+          let v = j / 6, k = 2 * v - 1, side = s.bend * (1 - k * k) + 0.024 * sin(v * 7 + s.tw * 3), xx = k * s.len * 0.5;
+          let tx = (mid + xx * ca - side * sa + 2) / 4 * (HF - 1), tz = (zz + xx * sa + side * ca + 1.75) / 3.5 * (HZ - 1);
+          let top = gy + s.h + 0.055 + 0.025 * sin(v * 5 + s.tw * 3);
+          for (let dz = -2;dz <= 2; dz++)
+            for (let dx = -2;dx <= 2; dx++) {
+              let ix = Math.round(tx) + dx, iz = Math.round(tz) + dz;
+              if (ix < 0 || iz < 0 || ix >= HF || iz >= HZ)
+                continue;
+              let h = top - 0.027 * ((ix - tx) ** 2 + (iz - tz) ** 2), idx = iz * HF + ix;
+              if (h > envelopes[idx])
+                envelopes[idx] = h;
+            }
+        }
+      }
+    }
+  }
+  function envelope(x, z) {
+    let u = clamp((x + 2) / 4) * (HF - 1), v = clamp((z + 1.75) / 3.5) * (HZ - 1), i = Math.floor(u), j = Math.floor(v), ii = Math.min(HF - 1, i + 1), jj = Math.min(HZ - 1, j + 1);
+    return mix(mix(envelopes[j * HF + i], envelopes[j * HF + ii], u - i), mix(envelopes[jj * HF + i], envelopes[jj * HF + ii], u - i), v - j);
+  }
+  function refreshSheet() {
+    paper.clear();
+    let shade = rgb("e9d9b4"), n = 34;
+    const get = (u, v, under) => {
+      let x = RX * (u - v), z = RZ * (u + v - 1), p = sheetPoint(x, z);
+      p[1] -= under ? 0.017 : 0;
+      return p;
+    };
+    grid(paper, n, n, (u, v) => get(u, v, false), shade, 4, (u, v) => [RX * (u - v), 0, RZ * (u + v - 1)]);
+    for (let edge = 0;edge < 4; edge++) {
+      grid(paper, n, 1, (u, v) => {
+        let ab = [[u, 0], [1, u], [1 - u, 1], [0, 1 - u]][edge];
+        return get(...ab, v > 0.5);
+      }, tint(shade, 0.81), 4);
+    }
+  }
+  function refreshFill() {
+    filling.clear();
+    let list = held && !roll.groups.includes(held) ? [...roll.groups, held] : roll.groups;
+    for (let g of list) {
+      let den = density(g.x, g.z), heldUp = g === held, stageWind = roll.wind;
+      for (let s of g.list) {
+        let spread = 0.76 + 0.24 * g.settle, x = g.x + s.dx * spread, z = g.z + s.dz * spread;
+        let y = 0.043 + sheetLift(x, z) + g.drop + (den + 0.042) * s.level * 0.88 + 0.019 * (1 - g.settle) * sin(g.phase + clock * 12);
+        if (heldUp)
+          y += 0.38 + 0.045 * sin(clock * 5);
+        let tuck = roll.fold[x < 0 ? 1 : 2];
+        if (abs(x) > 0.83)
+          x = edgeTuck(x, roll);
+        if (stageWind > 0.01) {
+          z = mix(z, getShape(roll).cz, stageWind * 0.8);
+          y = mix(y, 0.16, stageWind * 0.85);
+        }
+        strip(filling, x, baseY + y, plateZ + z, s.len * (1 - 0.34 * smooth((tuck - 0.63) / 0.33) * smooth((abs(g.x) - 0.63) / 0.42)), s.w, s.h, s.angle, s.bend, s.tw, vegColors[s.type]);
+      }
+    }
+  }
+  function cookedColor(x, a, r) {
+    let seed = r.seed % 67, side = (1 + cos(a)) * 0.5, h = mix(r.sideHeat[0], r.sideHeat[1], side);
+    let mott = 0.8 + 0.15 * sin(x * 13 + cos(a * 5) + seed) * sin(a * 8 - x * 9) + 0.09 * cos(x * 22 + a * 2);
+    let t = clamp(h * mott);
+    return [mix(0.93, 0.78, t), mix(0.82, 0.49, t), mix(0.62, 0.19, t)];
+  }
+  function rollModel(b, r, half = 0, fromWind = 1) {
+    b.clear();
+    let sh = getShape(r), lo = half === 1 ? r.cut : sh.lo, hi = half === -1 ? r.cut : sh.hi, span = Math.max(0.01, hi - lo);
+    function skinP(x, a, bias = 0) {
+      let rad = rollRadius(x, a, r, sh) + bias;
+      return [edgeTuck(x, r), rad * cos(a), rad * sin(a) + 0.035 * sin((x - sh.cx) * 2)];
+    }
+    function jag(a) {
+      return 0.047 * sin(7 * a + 1.2) + 0.023 * sin(13 * a - 0.5) + 0.017 * cos(a * 19);
+    }
+    grid(b, 40, Math.max(12, Math.ceil(span * 20)), (u, v) => {
+      let a = u * TAU * fromWind + 0.3, x = lo + v * span;
+      if (half)
+        x += jag(a) * (half === 1 ? (1 - v) ** 9 : v ** 9);
+      return skinP(x, a);
+    }, (u, v) => cookedColor(lo + v * span, u * TAU + 0.3, r), 17, (u, v) => [lo + v * span, (r.sideHeat[0] + r.sideHeat[1]) * 0.5, u * 2.1], fromWind > 0.999);
+    let orderBias = (r.order.indexOf(1) < r.order.indexOf(2) ? 1 : -1) * 0.12;
+    function seam(x) {
+      return 0.66 + orderBias * x + 0.6 * sin(x * 1.7 + 0.49);
+    }
+    if (fromWind > 0.18) {
+      grid(b, Math.max(12, Math.ceil(span * 18)), 4, (u, v) => {
+        let x = lo + span * u, a = seam(x) + v * 0.28;
+        return skinP(x, a, 0.001 + 0.01 * (1 - v) ** 2);
+      }, (u, v) => tint(cookedColor(lo + span * u, seam(lo + span * u), r), 0.82 + 0.18 * smooth(v * 3)), 4);
+    }
+    for (let s of [-1, 1]) {
+      let x = s < 0 ? sh.lo : sh.hi;
+      if (x < lo - 0.001 || x > hi + 0.001)
+        continue;
+      grid(b, 28, 7, (u, v) => {
+        let a = u * TAU, p = skinP(x, a);
+        return [p[0] + s * 0.035 * (1 - v), p[1] * v, p[2] * v];
+      }, (u, v) => tint(cookedColor(x, u * TAU, r), 0.84 + 0.13 * v), 4, null, true);
+      let e = exposed(r, s);
+      if (e > 0.01) {
+        strip(b, edgeTuck(x, r) + s * e * 0.22, 0.001, 0, e * 1.4, 0.039, 0.033, 0.06, 0.02, 0.3, vegColors[0]);
+      }
+    }
+    if (r.tear && r.tear.x >= lo - 0.05 && r.tear.x <= hi + 0.05) {
+      let tx = clamp(r.tear.x, lo + 0.03, hi - 0.03);
+      if (r.patch) {
+        grid(b, 8, 8, (u, v) => skinP(clamp(tx + (u - 0.5) * 0.37, lo, hi), -0.22 + (v - 0.5) * 1.18 + 0.08 * sin(u * 5), 0.017 + 0.013 * (1 - r.wet) * v * v), (u, v) => tint(cookedColor(tx, v * 0.7, r), 0.89 + 0.07 * r.wet), 4);
+      } else {
+        let points = [];
+        for (let i = 0;i < 7; i++)
+          points.push(skinP(tx + (i / 6 - 0.5) * 0.26, -0.12 + 0.13 * sin(i * 2), 0.009));
+        pipe(b, points, 0.018, rgb("89552f"), 4, 6);
+      }
+    }
+    if (r.open > 0.001 && !half) {
+      let dots = [], amount = clamp(r.open / 0.27);
+      for (let j = 0;j <= 30; j++) {
+        let a = 0.11 + TAU * amount * j / 30;
+        dots.push(skinP(r.cut + jag(a), a, 0.007));
+      }
+      pipe(b, dots, 0.008, rgb("805431"), 4, 5);
+    }
+    if (half)
+      cutFace(b, r, half, sh, skinP);
+    let rng = random(r.seed + 8741), h = (r.sideHeat[0] + r.sideHeat[1]) * 0.5;
+    if (h > 0.06) {
+      for (let i = 0;i < 70; i++) {
+        let x = mix(sh.lo + 0.03, sh.hi - 0.03, rng()), a = rng() * TAU, wd = 0.012 + rng() * 0.033 * (0.55 + r.slack), ht = (0.004 + rng() * 0.015) * h;
+        if (x < lo || x > hi)
+          continue;
+        grid(b, 9, 4, (u, v) => skinP(x + cos(u * TAU) * wd * v, a + sin(u * TAU) * wd * v * 3.5, ht * (1 - v * v) + 0.002), tint(cookedColor(x, a, r), 0.92 + 0.12 * rng()), 4, null, true);
+      }
+    }
+  }
+  function sectionItems(r, side) {
+    let candidates = [];
+    for (let g of r.groups)
+      for (let s of g.list) {
+        let x = g.x + s.dx, d = (x - r.cut) * side;
+        if (d >= -0.045)
+          candidates.push({ s, g, d });
+      }
+    let nearest = Math.min(...candidates.map((y) => Math.max(0, y.d)), 2);
+    return candidates.filter((item) => item.d < nearest + 0.32).sort((a, b) => a.d - b.d).slice(0, 32);
+  }
+  function cutFace(b, r, half, sh, skinP) {
+    let x = r.cut, rad = rollRadius(x, 0, r, sh), dir = -half, xx = edgeTuck(x, r);
+    grid(b, 40, 7, (u, v) => {
+      let p = skinP(x, u * TAU);
+      let a = u * TAU, jag = 0.047 * sin(7 * a + 1.2) + 0.023 * sin(13 * a - 0.5) + 0.017 * cos(a * 19);
+      return [xx + dir * 0.006 + jag * v ** 4, v * p[1], v * p[2]];
+    }, (u, v) => v > 0.87 ? rgb("e7c88d") : rgb("83613d"), 4, null, true);
+    for (let j = 0;j < 3; j++) {
+      let pts = [];
+      for (let i = 0;i <= 40; i++) {
+        let a = TAU * i / 40, p = skinP(x, a), k = 0.92 - j * (0.041 + 0.024 * r.slack);
+        pts.push([xx + dir * 0.01, k * p[1], k * p[2]]);
+      }
+      pipe(b, pts, 0.006, rgb(j % 2 ? "b9935d" : "f2d99c"), 4, 5);
+    }
+    for (let { g, s } of sectionItems(r, half)) {
+      let zz = clamp((g.z - sh.cz + s.dz) * 3.9, -1, 1), yy = (s.level - 0.37) * 2.26, lim = Math.max(1, Math.hypot(zz, yy));
+      ell(b, [xx + dir * 0.014, yy * rad * 0.87 / lim, zz * rad * 0.87 / lim], [0.026, s.h * 1.36, s.w * 1.39], vegColors[s.type], 12, 0, 0, 9, 6);
+    }
+  }
+  function nearSkin(x, z) {
+    let best = -1;
+    for (let j = 0;j < paper.v.length; j += 13) {
+      let dx = paper.v[j] - x, dz = paper.v[j + 2] - plateZ - z, d2 = dx * dx + dz * dz;
+      if (d2 < 0.036)
+        best = Math.max(best, paper.v[j + 1] - 0.26 * d2);
+    }
+    return best > 0 ? best : baseY + 0.11 + density(x, z);
+  }
+  function prepMark() {
+    tearMark.clear();
+    if (!roll.tear || roll.wind > 0.75)
+      return;
+    let x = roll.tear.x, z = roll.tear.z, y = nearSkin(x, z) + 0.01;
+    if (roll.patch || drag?.k === "scrap") {
+      let t = roll.patch ? smooth((clock - roll.repairAt) / 0.48) : 0, from = roll.patchFrom || repairP;
+      if (drag?.k === "scrap" && drag.travel > 6)
+        from = [drag.now[0], 0.8, drag.now[2]];
+      grid(tearMark, 8, 6, (u, v) => {
+        let dx = (u - 0.5) * 0.37, dz = (v - 0.5) * 0.32;
+        return [mix(from[0], x, t) + dx, mix(from[1] + 0.05, nearSkin(x + dx, z + dz) + 0.016, t) + sin(PI * t) * 0.28 + 0.024 * (1 - roll.wet) * v * v, mix(from[2], plateZ + z, t) + dz];
+      }, (u, v) => tint(scrapsCol, 0.97 - 0.12 * smooth((roll.wet * 1.45 - Math.hypot(u - 0.5, v - 0.5)) / 0.37)), 4);
+    }
+    if (roll.patch === 0) {
+      pipe(tearMark, [[x - 0.12, y, z + plateZ], [x - 0.055, y + 0.008, z + plateZ + 0.035], [x, y + 0.021, z + plateZ], [x + 0.1, y, z + plateZ + 0.024]], 0.016, rgb("835b3b"), 4, 6);
+    }
+  }
+  function initRoll() {
+    roll = newRoll();
+    roll.groups.push(portion(roll.seed % 250 / 1100 - 0.15, -0.08, "mixed", true));
+    held = null;
+    loosePick = false;
+    stage = "prep";
+    age = 0;
+    idle = 0;
+    turns = 0;
+    carry = 0;
+    meal = 0;
+    heat = 1;
+    pour = 0;
+    tilt = 0;
+    tiltGoal = 0;
+    chosen = null;
+    fillBowl(roll.seed);
+    shapeDirty = rollDirty = true;
+    food.clear();
+    tearMark.clear();
+    impulse = 0.16;
+  }
+  let ctx = null, noiseBuffer = null, activeSources = 0, queuedSound = null;
+  function audioStart() {
+    try {
+      let A = window.AudioContext || window.webkitAudioContext;
+      if (!A)
+        return;
+      if (!ctx) {
+        ctx = new A;
+        noiseBuffer = ctx.createBuffer(1, Math.ceil(ctx.sampleRate * 0.42), ctx.sampleRate);
+        let a = noiseBuffer.getChannelData(0);
+        for (let i = 0;i < a.length; i++)
+          a[i] = Math.random() * 2 - 1;
+      }
+      if (ctx.state !== "running")
+        ctx.resume().then(() => {
+          if (queuedSound) {
+            let first = queuedSound;
+            queuedSound = null;
+            sound(...first);
+          }
+        }).catch(() => {});
+    } catch {}
+  }
+  function sound(tag, amount = 1) {
+    if (!ctx || activeSources > 18)
+      return;
+    if (ctx.state !== "running") {
+      if (!queuedSound)
+        queuedSound = [tag, amount];
+      return;
+    }
+    const settings = { pick: [540, 0.095, 0.01], drop: [242, 0.13, 0.04], rub: [940, 0.11, 0.018], fold: [1680, 0.14, 0.024], crisp: [3800, 0.074, 0.04], water: [790, 0.16, 0.027], metal: [1290, 0.34, 0.022], hot: [4200, 0.082, 0.017], done: [772, 0.37, 0.029] };
+    let [freq, dur, vol] = settings[tag], tonal = ["pick", "drop", "water", "metal", "done"].includes(tag), src = tonal ? ctx.createOscillator() : ctx.createBufferSource(), g = ctx.createGain(), f = ctx.createBiquadFilter(), t = ctx.currentTime;
+    if (tonal) {
+      src.type = tag === "metal" ? "sine" : "triangle";
+      src.frequency.setValueAtTime(freq * (0.92 + amount * 0.08), t);
+      src.frequency.exponentialRampToValueAtTime(freq * (tag === "done" ? 1.49 : 0.62), t + dur);
+    } else {
+      src.buffer = noiseBuffer;
+      f.type = "bandpass";
+      f.frequency.value = freq * (0.78 + 0.22 * amount);
+      f.Q.value = 0.71;
+    }
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol * clamp(amount, 0.28, 1.7), t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(f);
+    f.connect(g);
+    g.connect(ctx.destination);
+    if (tonal)
+      f.frequency.value = 5400;
+    src.start(t);
+    src.stop(t + dur + 0.01);
+    activeSources++;
+    src.onended = () => {
+      activeSources--;
+      src.disconnect();
+      f.disconnect();
+      g.disconnect();
+    };
+  }
+  let eye = [0, 5, 8], aim = [0, 0.5, 0], VP = ident, fov = 0.57, aspect = 1, quality = 1.5, camDistance = 10, camStarted = false;
+  function stageTo(next) {
+    stage = next;
+    age = 0;
+    idle = 0;
+    rollDirty = true;
+    impulse = 0.22;
+  }
+  const SERVE = [-4.64, 0.16, 0.74], FILTER = [0.51, 0.1, -1.93];
+  function updateCamera(dt, instant = false) {
+    let ar = canvas.clientWidth / canvas.clientHeight, portrait = ar < 0.82;
+    let point = [-0.04, 0.79, -0.11], dir = [0.132, 0.62, 0.92], width = portrait ? 6.15 : 8.93;
+    if (stage === "lift" || stage === "fry") {
+      let t = stage === "lift" ? smooth(age / 2.35) : 1;
+      point = lerp3(point, [potP[0] - 0.13, 0.94, potP[2] - 0.04], t);
+      dir = lerp3(dir, [0.12, 0.245, 1], t);
+      width = mix(width, portrait ? 3.35 : 3.97, t);
+    }
+    if (stage === "drain" || stage === "serve" || stage === "eat") {
+      let t = stage === "drain" ? smooth(age / 2.5) : 1;
+      point = lerp3([potP[0] - 0.13, 0.94, potP[2] - 0.04], [-4.2, 0.47, 0.73], t);
+      dir = lerp3([0.12, 0.245, 1], [0.32, 0.66, 1], t);
+      width = mix(portrait ? 3.35 : 3.97, portrait ? 4.94 : 5.64, t);
+    }
+    if (stage === "eat") {
+      let t = smooth(age / 1.55);
+      point = lerp3(point, [-0.49, 1.19, -2.33], t);
+      dir = lerp3(dir, [0.08, 0.32, 1], t);
+      width = mix(width, portrait ? 5.08 : 6.8, t);
+    }
+    if (["cool", "filter", "finish"].includes(stage)) {
+      point = [1, 1.07, -2.03];
+      dir = [0.2, 0.4, 1];
+      width = portrait ? 3.95 : 4.85;
+    }
+    let height = width / ar;
+    if (!portrait && stage === "prep")
+      height = Math.max(4.65, height);
+    fov = portrait ? 0.76 : 0.55;
+    let dist = height / (2 * Math.tan(fov / 2)), topPad = safe.getBoundingClientRect().top, adjust = topPad / canvas.clientHeight;
+    point[1] += height * adjust * 0.4;
+    let goal = add(point, mul(unit(dir), dist));
+    let k = !camStarted || instant ? 1 : 1 - exp(-dt * 5.2);
+    eye = lerp3(eye, goal, k);
+    aim = lerp3(aim, point, k);
+    camStarted = true;
+    aspect = ar;
+    VP = matrix(projection(fov, ar, 0.09, 80), view(eye, aim));
+  }
+  function screen(p) {
+    let a = apply(VP, p), w = VP[3] * p[0] + VP[7] * p[1] + VP[11] * p[2] + VP[15];
+    return [(a[0] / w * 0.5 + 0.5) * canvas.clientWidth, (0.5 - a[1] / w * 0.5) * canvas.clientHeight];
+  }
+  function ground(sx, sy, y) {
+    let z = unit(sub(eye, aim)), right = unit(cross([0, 1, 0], z)), up = cross(z, right);
+    let ray = add(mul(z, -1), add(mul(right, (2 * sx / canvas.clientWidth - 1) * Math.tan(fov / 2) * aspect), mul(up, (1 - 2 * sy / canvas.clientHeight) * Math.tan(fov / 2))));
+    return add(eye, mul(ray, (y - eye[1]) / ray[1]));
+  }
+  function corners() {
+    return [[0, RZ], [-RX, 0], [RX, 0], [0, -RZ]].map(([x, z]) => sheetPoint(x, z));
+  }
+  function handlePoint() {
+    return apply(skimmer.model, [1.48, 0.57, -0.38]);
+  }
+  function suggestion() {
+    if (stage === "prep") {
+      if (held)
+        return { k: "place", p: world(0.3, 0.13, 0.05) };
+      if (roll.tear && !roll.patch)
+        return { k: "scrap", p: repairP };
+      if (roll.patch === 1)
+        return { k: "paste", p: [pasteP[0], 0.35, pasteP[2]] };
+      if (roll.windGoal >= 0.94)
+        return { k: "spoon", p: handlePoint() };
+      if (roll.placed <= 1)
+        return { k: "bowl", p: [bowlP[0], 0.94, bowlP[2]] };
+      let i = roll.goals.findIndex((v) => v < 0.46);
+      if (i < 0)
+        i = 3;
+      return { k: "corner", i, p: corners()[i] };
+    }
+    if (stage === "fry")
+      return { k: "spoon", p: handlePoint() };
+    if (stage === "serve") {
+      let r = chosen || archive[archive.length - 1];
+      if (r)
+        return { k: r.open > 0.62 ? "taste" : "end", p: add(shelfPoint(r), [r.open > 0.62 ? 0.49 + r.open * 0.39 : edgeTuck(getShape(r).hi, r) * 0.76, 0.04, 0.02]) };
+    }
+    if (stage === "cool" || stage === "filter")
+      return { k: "pitcher", p: [1.72, 1.44, -2.21] };
+    return null;
+  }
+  function targets(sx, sy) {
+    let hits = [];
+    const test = (k, p, r, data = null, weight = 0) => {
+      let a = screen(p), b = screen(add(p, [r, 0, 0])), rr = Math.max(23, Math.hypot(a[0] - b[0], a[1] - b[1])), d = Math.hypot(sx - a[0], sy - a[1]) / rr;
+      if (d <= 1)
+        hits.push({ k, p, data, score: d + weight });
+    };
+    if (stage === "prep") {
+      if (held) {
+        let p = ground(sx, sy, baseY + 0.1), x = p[0], z = p[2] - plateZ;
+        if (abs(x) / RX + abs(z) / RZ < 1.25)
+          return { k: "place", p };
+      }
+      test("bowl", [bowlP[0], 0.81, bowlP[2]], 0.95);
+      if (roll.tear && !roll.patch)
+        test("scrap", repairP, 0.43);
+      if (roll.patch === 1)
+        test("paste", [pasteP[0], 0.35, pasteP[2]], 0.45);
+      if (roll.windGoal >= 0.92)
+        test("spoon", handlePoint(), 0.62, null, -0.1);
+      corners().forEach((p, i) => {
+        if (i !== 3 || roll.goals.every((v) => v > 0.36) || roll.windGoal > 0.03)
+          test("corner", p, i === 3 ? 0.5 : 0.41, i, -0.04);
+      });
+      if (roll.windGoal < 0.89)
+        for (let g of roll.groups)
+          test("pile", world(g.x, 0.18 + density(g.x, g.z) * 0.6, g.z), 0.45, g, 0.03);
+    } else if (stage === "fry") {
+      test("spoon", handlePoint(), 0.58);
+      let a = apply(skimmer.model, [0.9, 0.37, -0.15]);
+      test("spoon", a, 0.32);
+    } else if (stage === "serve") {
+      for (let [i, r] of archive.entries()) {
+        let p = shelfPoint(r), sh = getShape(r);
+        for (let side of [-1, 1])
+          test("end", add(p, [edgeTuck(side < 0 ? sh.lo : sh.hi, r) * 0.76, 0, 0]), 0.32, { r, side }, -0.06);
+        test("body", p, Math.max(0.37, (sh.hi - sh.lo) * 0.42), { r }, 0.1);
+        if (r.open > 0.62) {
+          for (let side of [-1, 1])
+            test("taste", add(p, [side * (0.49 + r.open * 0.39), 0.08, 0.08]), 0.45, { r }, -0.48);
+        }
+      }
+      test("fresh", [-2.53, 0.24, 1.89], 0.66);
+    } else if (stage === "cool" || stage === "filter") {
+      test("pitcher", [1.72, 1.44, -2.21], 0.72);
+      test("pitcher", [1.45, 1.03, -2.18], 0.52);
+    }
+    hits.sort((a, b) => a.score - b.score);
+    return hits[0] || null;
+  }
+  function setFold(i, v, record = true) {
+    if (i === 3) {
+      roll.windGoal = clamp(v);
+      roll.slack = clamp(1.06 - 0.53 * roll.tension - 0.52 * (roll.goals[1] + roll.goals[2]) * 0.5 + 0.14 * (1 - roll.windGoal), 0.05, 0.94);
+    } else {
+      roll.goals[i] = clamp(v);
+      if (record && v > 0.12 && !roll.order.includes(i))
+        roll.order.push(i);
+      if (v < 0.08)
+        roll.order = roll.order.filter((n) => n !== i);
+      if (v < 0.38)
+        roll.windGoal = 0;
+    }
+    shapeDirty = rollDirty = true;
+  }
+  function stress(i, val, speed) {
+    if (roll.tear || val < 0.92 || speed < 0.1)
+      return;
+    let high = roll.groups.reduce((a, b) => density(a.x, a.z) > density(b.x, b.z) ? a : b);
+    if (density(high.x, high.z) < 0.388)
+      return;
+    roll.tear = { x: high.x, z: high.z, corner: i };
+    sound("crisp");
+    impulse = 0.34;
+    rollDirty = true;
+  }
+  function landing(g, p) {
+    let x = p[0], z = p[2] - plateZ;
+    let norm = abs(x) / 1.54 + abs(z) / 1.28;
+    if (norm > 1) {
+      x /= norm;
+      z /= norm;
+    }
+    if (!roll.groups.includes(g)) {
+      if (roll.groups.length >= 16) {
+        held = null;
+        return;
+      }
+      roll.groups.push(g);
+    }
+    g.tx = x;
+    g.tz = z;
+    g.x = x;
+    g.z = z;
+    g.drop = 0.25;
+    g.fall = 0.12;
+    g.support = 0.12;
+    g.supportSpeed = 0;
+    g.settle = 0.1;
+    held = null;
+    loosePick = false;
+    impulse = 0.26;
+    sound("drop", 0.7 + density(x, z));
+    shapeDirty = rollDirty = true;
+  }
+  function beginCooking() {
+    if (roll.windGoal < 0.92)
+      return;
+    held = null;
+    roll.wind = roll.windGoal = 1;
+    carry = 0;
+    stageTo("lift");
+    sound("metal");
+  }
+  function shelfPoint(r) {
+    return [SERVE[0] + r.shelf[0], 0.46, SERVE[2] + r.shelf[1]];
+  }
+  function chooseCut(r, at) {
+    let sh = getShape(r);
+    if (r.open > 0.02)
+      return;
+    let low = sh.lo + (sh.hi - sh.lo) * 0.23, high = sh.hi - (sh.hi - sh.lo) * 0.23;
+    if (at !== undefined) {
+      r.cut = clamp(at, low, high);
+      return;
+    }
+    let best = 1e6;
+    for (let i = 0;i <= 30; i++) {
+      let x = mix(low, high, i / 30), val = lineMass(x, r) + 0.56 * abs(x - (sh.lo + sh.hi) / 2);
+      if (val < best) {
+        best = val;
+        r.cut = x;
+      }
+    }
+  }
+  function beginDrag(e) {
+    if (drag || document.hidden)
+      return;
+    e.preventDefault();
+    audioStart();
+    let { clientX: x, clientY: y } = e, hit = targets(x, y);
+    if (!hit) {
+      if (!guided) {
+        guided = [x, y, clock];
+        impulse = 0.5;
+        lastPose = -1;
+      }
+      return;
+    }
+    idle = 0;
+    canvas.setPointerCapture?.(e.pointerId);
+    let p = ground(x, y, baseY + 0.12);
+    drag = { id: e.pointerId, k: hit.k, data: hit.data, start: [x, y], p, now: p, last: [x, y], travel: 0, startAge: age, prev: 0 };
+    if (hit.k === "bowl") {
+      if (held && !roll.groups.includes(held))
+        held = null;
+      if (roll.groups.length < 16) {
+        held = portion(bowlP[0], bowlP[2] - plateZ, x > screen([bowlP[0], 0.8, bowlP[2]])[0] ? "carrot" : "mixed");
+        held.drop = 0.59;
+        drag.lift = true;
+        sound("pick");
+        shapeDirty = true;
+      }
+    }
+    if (hit.k === "pile") {
+      held = hit.data;
+      drag.original = [held.x, held.z];
+      held.drop = 0.05;
+      drag.lift = true;
+      sound("rub");
+      shapeDirty = true;
+    }
+    if (hit.k === "place") {
+      drag.lift = true;
+    }
+    if (hit.k === "corner") {
+      let i = hit.data;
+      drag.prev = i === 3 ? roll.windGoal : roll.goals[i];
+      setFold(i, clamp(drag.prev + 0.075));
+      sound("rub");
+      impulse = 0.18;
+    }
+    if (hit.k === "scrap" || hit.k === "paste")
+      sound(hit.k === "paste" ? "water" : "rub");
+    if (hit.k === "end" || hit.k === "body" || hit.k === "taste") {
+      chosen = hit.data.r;
+      drag.orig = [...chosen.shelf];
+      drag.prev = chosen.openGoal;
+      if (hit.k === "end" && chosen.open < 0.01 && !chosen.cutChosen)
+        chooseCut(chosen);
+    }
+    if (hit.k === "spoon") {
+      sound("metal", 0.52);
+      impulse = 0.3;
+      drag.startAngle = roll.angle;
+    }
+    if (hit.k === "pitcher") {
+      tiltGoal = 0.23;
+      drag.prev = tilt;
+      impulse = 0.25;
+    }
+  }
+  function moving(e) {
+    if (!drag || drag.id !== e.pointerId)
+      return;
+    e.preventDefault();
+    idle = 0;
+    let d = drag, { clientX: x, clientY: y } = e, p = ground(x, y, baseY + 0.12);
+    d.travel = Math.max(d.travel, Math.hypot(x - d.start[0], y - d.start[1]));
+    let dx = p[0] - d.p[0], dz = p[2] - d.p[2];
+    d.now = p;
+    if (d.lift && held && d.travel > 4) {
+      held.tx = p[0];
+      held.tz = p[2] - plateZ;
+      held.drop = 0.028;
+      shapeDirty = true;
+    }
+    if (d.k === "corner" && d.travel > 4) {
+      let i = d.data, travel = [-dz, dx, -dx, dz][i], value = d.prev + travel / (i === 3 ? 1.62 : 2.12);
+      if (i === 3 && travel > 0.06)
+        roll.tension = clamp(0.12 + 0.42 * travel + 0.66 * abs(dx));
+      setFold(i, value);
+      stress(i, value, Math.max(abs(travel) * 0.53, Math.hypot(x - d.last[0], y - d.last[1]) * 0.014));
+      if (i !== 3 && abs(travel) > 0.18) {
+        for (let g of roll.groups) {
+          let dist = i === 0 ? abs(g.z - 0.26) : abs(g.x - (i === 1 ? -0.76 : 0.76));
+          if (dist < 0.6) {
+            g.tx += clamp(p[0] - d.lastWorldX || 0, -0.04, 0.04) * 0.09;
+            g.tz += clamp(p[2] - d.lastWorldZ || 0, -0.04, 0.04) * 0.09;
+          }
+        }
+      }
+      if (abs(travel - d.prevSound || 0) > 0.17 || d.prevSound === undefined) {
+        sound("rub", 0.6 + value);
+        d.prevSound = travel;
+      }
+    }
+    if (d.k === "spoon" && stage === "fry") {
+      let move = (x - d.last[0]) / canvas.clientWidth;
+      flipVelocity = clamp(flipVelocity + move * 19, -4, 4);
+      roll.angle += move * 4;
+      rollDirty = true;
+    }
+    if (d.k === "end" && d.travel > 5) {
+      let r = d.data.r;
+      r.openGoal = clamp(d.prev + dx * d.data.side / 1.04);
+      crackAudio(r);
+    }
+    if (d.k === "body" && d.travel > 5) {
+      let r = d.data.r;
+      r.shelf = [clamp(d.orig[0] + dx, -0.64, 0.64), clamp(d.orig[1] + dz, -1, 1)];
+    }
+    if (d.k === "pitcher")
+      tiltGoal = clamp(d.prev + 0.25 + (d.start[1] - y) / 170 + (d.start[0] - x) / 150, 0, 1);
+    d.last = [x, y];
+    d.lastWorldX = p[0];
+    d.lastWorldZ = p[2];
+  }
+  function crackAudio(r) {
+    let n = Math.floor(r.openGoal * 12);
+    if (n > (r.cracks || 0)) {
+      sound("crisp", 0.65 + 0.65 * r.openGoal);
+      r.cracks = n;
+      impulse = 0.12;
+    }
+  }
+  function finishDrag(e, cancel = false) {
+    if (!drag || drag.id !== e.pointerId)
+      return;
+    e.preventDefault();
+    let d = drag, tap = d.travel < 12;
+    drag = null;
+    idle = 0;
+    if (cancel) {
+      if (held && roll.groups.includes(held)) {
+        held.tx = d.original?.[0] ?? held.x;
+        held.tz = d.original?.[1] ?? held.z;
+      }
+      if (d.k === "corner")
+        setFold(d.data, d.prev);
+      held = null;
+      tiltGoal = 0;
+      shapeDirty = true;
+      return;
+    }
+    let p = ground(e.clientX, e.clientY, baseY + 0.12);
+    if (d.lift && held) {
+      if (d.k === "place" || !tap && abs(p[0]) / RX + abs(p[2] - plateZ) / RZ < 1.35)
+        landing(held, p);
+      else if (tap) {
+        loosePick = true;
+        held.drop = d.k === "bowl" ? 0.55 : 0.07;
+      } else {
+        if (roll.groups.includes(held)) {
+          held.tx = d.p[0];
+          held.tz = d.p[2] - plateZ;
+        }
+        held = null;
+      }
+      shapeDirty = true;
+    }
+    if (d.k === "corner") {
+      let i = d.data;
+      if (tap) {
+        if (i === 3)
+          roll.tension = mix(roll.tension, 0.19, 0.44);
+        let v = i === 3 ? d.prev > 0.93 ? 0 : Math.min(1, d.prev + 0.56) : d.prev > 0.52 ? 0 : 0.77;
+        setFold(i, v);
+        sound(v > 0.5 ? "fold" : "rub");
+      } else {
+        let val = i === 3 ? roll.windGoal : roll.goals[i];
+        setFold(i, Math.max(0, val - (i === 3 && val > 0.93 ? 0 : 0.036)));
+        sound("fold", 0.7 + val * 0.3);
+      }
+    }
+    if (d.k === "scrap" && (tap || Math.hypot(p[0] - roll.tear.x, p[2] - plateZ - roll.tear.z) < 0.85)) {
+      roll.patch = 1;
+      roll.repairAt = clock;
+      roll.patchFrom = tap ? repairP : [p[0], 0.68, p[2]];
+      sound("fold");
+      shapeDirty = rollDirty = true;
+    }
+    if (d.k === "paste" && (tap || Math.hypot(p[0] - roll.tear.x, p[2] - plateZ - roll.tear.z) < 0.85)) {
+      roll.patch = 2;
+      sound("water");
+      shapeDirty = rollDirty = true;
+    }
+    if (d.k === "spoon") {
+      if (stage === "prep")
+        beginCooking();
+      else if (stage === "fry") {
+        let ready = Math.min(...roll.sideHeat) > 0.4 && turns > 0;
+        if (ready && (tap || e.clientY < d.start[1] - 29)) {
+          stageTo("drain");
+          sound("metal");
+        } else {
+          flipVelocity += (tap ? 3.8 : 1.4) / (1 + 0.45 * abs(getShape(roll).cx));
+          turns++;
+          sound("hot");
+        }
+      }
+    }
+    if (d.k === "end" && tap) {
+      let r = d.data.r;
+      r.openGoal = clamp(r.openGoal + 0.3);
+      crackAudio(r);
+    }
+    if (d.k === "body" && tap) {
+      let r = d.data.r;
+      r.flipped += PI;
+      if (!r.open) {
+        chooseCut(r, p[0] - shelfPoint(r)[0]);
+        r.cutChosen = true;
+      }
+      sound("metal", 0.5);
+    }
+    if (d.k === "taste") {
+      chosen = d.data.r;
+      stageTo("eat");
+      sound("crisp");
+    }
+    if (d.k === "fresh") {
+      initRoll();
+      sound("rub");
+    }
+    if (d.k === "pitcher") {
+      if (stage === "cool" && heat < 0.08)
+        stageTo("filter");
+      tiltGoal = tap ? Math.min(1, 0.52 + tilt * 0.45) : 0;
+      if (tap)
+        pulsePour = 1.5;
+    }
+  }
+  canvas.addEventListener("pointerdown", beginDrag, { passive: false });
+  canvas.addEventListener("pointermove", moving, { passive: false });
+  canvas.addEventListener("pointerup", (e) => finishDrag(e), { passive: false });
+  canvas.addEventListener("pointercancel", (e) => finishDrag(e, true), { passive: false });
+  canvas.addEventListener("lostpointercapture", (e) => finishDrag(e, true), { passive: false });
+  for (let evt of ["contextmenu", "gesturestart", "gesturechange", "dblclick", "touchmove"])
+    window.addEventListener(evt, (e) => e.preventDefault(), { passive: false });
+  const filterWare = group(), filterGlass = group(true), liquid = group(), pitcher = group(true), contents = group(), stream = group(), crumbs = group(), freshSheet = group();
+  filterGlass.opacity = 0.33;
+  pitcher.opacity = 0.47;
+  let pulsePour = 0, heatTick = 0, particleDebt = 0, lastGeometry = -1, lastPose = -1, lastFood = -1, shadowAge = 10, qualityTime = 0, frameCost = 16;
+  freshSheet.model = transform(-2.53, 0.15, 1.72, -0.12, 0, 0.36);
+  const fx = FILTER[0], fz = FILTER[2];
+  lathe(filterGlass, fx, 0.05, fz, [[0.01, 0.01], [0.41, 0.01], [0.45, 0.05], [0.46, 0.75], [0.49, 0.8], [0.46, 0.82], [0.43, 0.79], [0.42, 0.08], [0.01, 0.07]], rgb("a8c6c1"), 13);
+  ring(filterWare, fx, 0.87, fz, 0.467, 0.023, metal, 11);
+  lathe(filterWare, fx, 0.84, fz, [[0.09, -0.18], [0.16, -0.03], [0.43, 0.12], [0.59, 0.27], [0.6, 0.3], [0.57, 0.31], [0.39, 0.16], [0.12, -0.028], [0.09, -0.18]], cream, 6);
+  for (let i = 0;i < 12; i++) {
+    let a = TAU * i / 12;
+    pipe(filterWare, [[fx + 0.12 * cos(a), 0.82, fz + 0.12 * sin(a)], [fx + 0.55 * cos(a), 1.125, fz + 0.55 * sin(a)]], 0.009, rgb("c8c6ad"), 11, 5);
+  }
+  lathe(pitcher, 0, 0, 0, [[0.01, -0.52], [0.44, -0.52], [0.49, -0.44], [0.49, 0.45], [0.45, 0.5], [0.42, 0.48], [0.43, -0.42], [0.01, -0.45]], rgb("b3c4bb"), 13);
+  arc(pitcher, [0.43, 0.35, 0], [1.04, 0.13, 0], [0.44, -0.29, 0], 0.065, rgb("a9beb7"), 13);
+  grid(freshSheet, 12, 12, (u, v) => world(RX * (u - v), 0.014 + 0.036 * (u ** 8 + v ** 8), RZ * (u + v - 1)), rgb("e9d3a3"), 4);
+  const particles = [];
+  function emitBubble() {
+    let sh = getShape(roll), x = mix(sh.lo, sh.hi, Math.random()), s = Math.random() < 0.5 ? -1 : 1, rr = rollRadius(x, PI / 2 * s, roll, sh), fit = Math.min(0.92, 1.77 / (edgeTuck(sh.hi, roll) - edgeTuck(sh.lo, roll)));
+    particles.push({ x: potP[0] + edgeTuck(x, roll) * fit, z: potP[2] + s * (rr * fit + 0.018), age: 0, life: 0.51 + Math.random() * 0.88, r: (0.014 + Math.random() * 0.042) * (1 + roll.slack * 0.64), phase: Math.random() * TAU });
+  }
+  function refreshOil() {
+    oil.clear();
+    let h = 0.73 - (stage === "filter" || stage === "finish" ? 0.17 : 0);
+    grid(oil, 65, 13, (u, v) => {
+      let a = TAU * u, r = 0.942 * v + 0.001, x = r * cos(a), z = r * sin(a);
+      return [potP[0] + x, h + 0.009 * heat * (sin(r * 26 - clock * 3.1) * cos(a * 3) * v + 0.56 * sin(x * 16 + z * 9 + clock * 2)), potP[2] + z];
+    }, rgb("bd8830"), 10, null, true);
+  }
+  function fxGeometry() {
+    bubbleBatch.clear();
+    for (let p of particles) {
+      let t = p.age / p.life, rad = p.r * (0.2 + 0.8 * sin(PI * t * 0.77)) * clamp((1 - t) * 8);
+      if (rad < 0.001)
+        continue;
+      ell(bubbleBatch, [p.x + 0.045 * sin(p.phase + 3 * t), 0.729 + 0.063 * t + 0.1 * t * t, p.z + 0.09 * cos(p.phase) * t], [rad, rad * 0.83, rad], rgb("dfb964"), 13, 0, 0, 8, 6);
+    }
+    steam.clear();
+    for (let i = 0;i < 5; i++) {
+      let t = (clock * 0.31 + i * 0.202) % 1, op = heat * (stage === "fry" ? 0.97 : 0.27);
+      if (op < 0.025)
+        continue;
+      let pts = [];
+      for (let j = 0;j < 8; j++) {
+        let f = j / 7;
+        pts.push([potP[0] + 0.45 * cos(i * 2.4) + 0.09 * sin(t * 7 + f * 3 + i), 0.84 + 0.65 * t + f * 0.24, potP[2] + 0.34 * sin(i * 2.4) + 0.06 * f]);
+      }
+      pipe(steam, pts, pts.map((_, j) => 0.012 * op * sin(PI * (j + 0.1) / 7.2) * sin(PI * t) + 0.0003), cream, 0, 5);
+    }
+    dropBatch.clear();
+    if (stage === "drain" && age < 2.27)
+      for (let i = 0;i < 9; i++) {
+        let t = (age * (1.7 + i * 0.07) + i * 0.137) % 1, px = displayPos[0] + 0.41 * sin(i * 2.2), py = displayPos[1] - 0.16 - 0.72 * t * t, pz = displayPos[2] + cos(i) * 0.14;
+        if (py > 0.12)
+          pipe(dropBatch, [[px, py, pz], [px, py - 0.04 - 0.09 * t, pz]], [0.012, 0.007], rgb("ca9e4a"), 13, 6);
+      }
+  }
+  function cleanGeometry() {
+    let showing = ["cool", "filter", "finish"].includes(stage);
+    for (let b of [filterWare, filterGlass, liquid, pitcher, contents, stream, crumbs])
+      b.visible = showing;
+    if (!showing)
+      return;
+    let setup = stage === "cool" ? smooth((0.2 - heat) / 0.19) : 1;
+    filterWare.model = transform(-0.52 * (1 - setup), 0.14 * sin(setup * PI), -1.33 * (1 - setup));
+    filterGlass.model = filterWare.model;
+    let a = tilt * 1.19, cs = cos(a), sn = sin(a);
+    let x = 1.47 - 0.42 * tilt, y = 1.37;
+    let mat = new Float32Array([cs, sn, 0, 0, -sn, cs, 0, 0, 0, 0, 1, 0, x, y, -2.16, 1]);
+    pitcher.model = contents.model = mat;
+    contents.clear();
+    let level = -0.43 + 0.8 * (1 - pour);
+    lathe(contents, 0, 0, 0, [[0.005, -0.44], [0.426, -0.44], [0.426, level], [0.01, level]], rgb("b7913c"), 10, 44);
+    liquid.clear();
+    let h = 0.087 + 0.69 * pour;
+    lathe(liquid, fx, 0.06, fz, [[0.01, 0.008], [0.405, 0.008], [0.414, h], [0.01, h]], rgb("c69e46"), 10, 48);
+    stream.clear();
+    if (pour < 1 && stage === "filter" && tilt > 0.22) {
+      let src = apply(mat, [-0.44, 0.46, 0.06]);
+      arc(stream, src, [fx + 0.12, src[1] - 0.1, fz - 0.08], [fx + 0.037, 1, fz], 0.01 + 0.029 * tilt, rgb("d3a74e"), 13);
+      pipe(stream, [[fx, 0.83, fz], [fx + 0.01, 0.07 + h, fz + 0.012]], 0.012, rgb("dfb34d"), 13);
+    }
+    if (stage === "finish" && age < 0.65) {
+      let t = age / 0.65;
+      ell(stream, [fx, 0.89 - 0.65 * t * t, fz], [0.028, 0.041, 0.028], gold, 13, 0, 0, 10, 6);
+    }
+    crumbs.clear();
+    for (let i = 0;i < Math.floor(pour * 20); i++) {
+      let a = i * 2.4, r = 0.12 + 0.29 * (i * 37 % 91 / 91);
+      ell(crumbs, [fx + r * cos(a), 0.804 + r * 0.56, fz + r * sin(a)], [0.026, 0.018, 0.048], vegColors[i % 6], 12, 0, a, 8, 5);
+    }
+  }
+  function cacheArchive(r) {
+    r.leftMesh = group();
+    r.rightMesh = group();
+    r.lastOpen = -1;
+    r.lastHeat = -1;
+    r.flipNow = 0;
+    chooseCut(r);
+    r.shelf = [0.02, [-0.73, 0.73, 0][archive.length % 3]];
+    archive.push(r);
+  }
+  function removeArchived(r) {
+    for (let b of [r.leftMesh, r.rightMesh]) {
+      let i = batches.indexOf(b);
+      if (i >= 0)
+        batches.splice(i, 1);
+      b.dispose();
+    }
+    archive = archive.filter((v) => v !== r);
+  }
+  function served(dt) {
+    for (let r of archive) {
+      r.open = mix(r.open, r.openGoal, 1 - exp(-dt * 8));
+      r.flipNow = mix(r.flipNow, r.flipped, 1 - exp(-dt * 6));
+      let split = r.open > 0.2, crackStep = Math.floor(clamp(r.open / 0.27) * 14);
+      if (r.lastOpen !== split || r.lastCut !== r.cut || r.crackStep !== crackStep) {
+        rollModel(r.leftMesh, r, split ? -1 : 0);
+        if (split)
+          rollModel(r.rightMesh, r, 1);
+        r.lastOpen = split;
+        r.lastCut = r.cut;
+        r.crackStep = crackStep;
+      }
+      let c = shelfPoint(r), opening = smooth((r.open - 0.2) / 0.8), lift = 0;
+      for (let [i, b] of [r.leftMesh, r.rightMesh].entries()) {
+        let s = i ? 1 : -1;
+        let spread = 0.39 * opening;
+        let yaw = s * (0.13 + 0.74 * opening) * opening;
+        let model = transform(c[0] + s * spread, c[1] + lift + 0.033 * sin(r.flipNow), c[2] + opening * 0.09, yaw, r.flipNow + 0.12, s === 1 && stage === "eat" && r === chosen ? Math.max(0.02, 1 - smooth((age - 1.45) / 0.62)) : 1);
+        if (stage === "eat" && r === chosen) {
+          let k = Math.max(0.005, 1 - smooth((age - 1.66) / 0.58)), t = smooth(age / 1.73), dst = apply((i ? mom : girl).head.model, [0, -0.21, 0.42]);
+          let pos = lerp3(add(c, [s * spread, 0, 0]), dst, t);
+          pos[1] += 0.38 * sin(PI * t);
+          model = transform(...pos, yaw + 0.43 * t, r.flipNow + 0.12 + 0.32 * t, k * mix(1, 0.47, t));
+        }
+        b.model = model;
+        b.visible = i === 0 || split;
+      }
+    }
+  }
+  function rawPhysics(dt) {
+    let active = false, changing = false;
+    for (let i = 0;i < 3; i++) {
+      let diff = roll.goals[i] - roll.fold[i];
+      if (abs(diff) > 0.0004) {
+        roll.fold[i] += diff * (1 - exp(-dt * (drag?.k === "corner" ? 23 : 12)));
+        changing = true;
+      }
+    }
+    if (abs(roll.wind - roll.windGoal) > 0.0003) {
+      roll.wind = mix(roll.wind, roll.windGoal, 1 - exp(-dt * 12));
+      changing = true;
+    }
+    let list = held && !roll.groups.includes(held) ? [...roll.groups, held] : roll.groups;
+    for (let g of list) {
+      let load = g === held ? 0.025 : clamp(1 - g.drop / 0.24, 0.15, 1);
+      let substeps = Math.ceil(dt / 0.018), h = dt / substeps;
+      for (let i = 0;i < substeps; i++) {
+        g.supportSpeed += ((load - g.support) * 138 - 14 * g.supportSpeed) * h;
+        g.support += g.supportSpeed * h;
+      }
+      if (abs(load - g.support) > 0.001 || abs(g.supportSpeed) > 0.015 || clock - g.impact < 1.1)
+        active = true;
+      let d = Math.hypot(g.tx - g.x, g.tz - g.z);
+      if (d > 0.001) {
+        let k = 1 - exp(-dt * 21);
+        g.x = mix(g.x, g.tx, k);
+        g.z = mix(g.z, g.tz, k);
+        changing = true;
+      }
+      if (g !== held) {
+        if (g.drop > 0.001 || abs(g.fall) > 0.035) {
+          g.fall -= dt * 5;
+          g.drop += g.fall * dt;
+          if (g.drop < 0) {
+            g.drop = 0;
+            if (g.fall < -0.49)
+              g.impact = clock;
+            g.fall = -g.fall * 0.2;
+            if (g.fall < 0.04)
+              g.fall = 0;
+          }
+          active = true;
+        }
+        g.settle = mix(g.settle, 1, 1 - exp(-dt * 5));
+        if (g.settle < 0.998)
+          active = true;
+      }
+    }
+    if (roll.patch === 2 && roll.wet < 0.999) {
+      roll.wet = mix(roll.wet, 1, 1 - exp(-dt * 2.8));
+      changing = true;
+    }
+    if (active || changing || held || clock - roll.repairAt < 0.55 || drag?.k === "scrap") {
+      shapeDirty = true;
+      if (changing)
+        rollDirty = true;
+    }
+  }
+  function simulate(dt) {
+    clock += dt;
+    age += dt;
+    idle += dt;
+    impulse *= exp(-dt * 4);
+    let prep = stage === "prep";
+    if (prep)
+      rawPhysics(dt);
+    if (stage === "lift" && age >= 2.4) {
+      stageTo("fry");
+      sound("hot");
+      turns = 0;
+      flipVelocity = 0.19;
+    }
+    if (stage === "fry") {
+      let sh = getShape(roll);
+      roll.angle += flipVelocity * dt;
+      flipVelocity *= exp(-dt * 1.12);
+      roll.angle += dt * 0.042 * sin(clock + sh.cx * 3);
+      let contact = 0.5 + 0.5 * cos(roll.angle);
+      for (let j = 0;j < 2; j++) {
+        let side = j ? 1 - contact : contact;
+        roll.sideHeat[j] = clamp(roll.sideHeat[j] + dt * (0.007 + 0.049 * side) / (1 + 0.23 * lineMass(sh.cx, roll)));
+      }
+      particleDebt += dt * (8 + 14 * roll.slack + abs(flipVelocity) * 1.4);
+      while (particleDebt >= 1) {
+        if (particles.length < 48)
+          emitBubble();
+        particleDebt--;
+      }
+      heatTick += dt;
+      if (heatTick > 0.5) {
+        heatTick = 0;
+        sound("hot", 0.28 + roll.slack * 0.28);
+      }
+      rollDirty = true;
+    }
+    for (let i = particles.length - 1;i >= 0; i--) {
+      particles[i].age += dt;
+      if (particles[i].age >= particles[i].life)
+        particles.splice(i, 1);
+    }
+    if (stage === "drain" && age >= 2.6) {
+      cacheArchive(roll);
+      stageTo("serve");
+      sound("metal");
+      sound("done");
+    }
+    if (stage === "eat" && age >= 2.3) {
+      if (chosen)
+        removeArchived(chosen);
+      chosen = null;
+      stageTo("cool");
+    }
+    if (stage === "cool") {
+      heat = Math.max(0, 1 - age / 3.4);
+      if (age >= 4.2)
+        stageTo("filter");
+    }
+    if (stage === "filter") {
+      pulsePour = Math.max(0, pulsePour - dt);
+      if (!drag && pulsePour <= 0)
+        tiltGoal = 0;
+      tilt = mix(tilt, tiltGoal, 1 - exp(-dt * 4));
+      if (tilt > 0.22) {
+        pour = clamp(pour + dt * (tilt - 0.18) * 0.235);
+        heatTick += dt;
+        if (heatTick > 0.39) {
+          sound("water", 0.55);
+          heatTick = 0;
+        }
+      }
+      if (pour >= 1) {
+        stageTo("finish");
+        sound("water");
+        tiltGoal = 0;
+      }
+    }
+    if (stage === "finish") {
+      tilt *= exp(-dt * 2.3);
+      if (age > 2.9) {
+        initRoll();
+        sound("done", 0.55);
+      }
+    }
+    served(dt);
+    updateCamera(dt);
+  }
+  function dynamics() {
+    let prep = stage === "prep", cook = ["lift", "fry", "drain"].includes(stage), ready = roll.wind > 0.56;
+    paper.visible = prep && roll.wind < 0.95;
+    filling.visible = prep && roll.wind < 0.86;
+    tearMark.visible = prep;
+    food.visible = cook || prep && ready;
+    freshSheet.visible = ["serve", "eat", "cool", "filter", "finish"].includes(stage);
+    let sug = suggestion(), demo = idle > 4 ? Math.max(0, sin((idle - 4) * 1.55)) : 0;
+    cueLift = prep && sug?.k === "corner" ? demo : 0;
+    cueCorner = sug?.i ?? 0;
+    if (prep && (shapeDirty && (clock - lastGeometry > 1 / 40 || drag) || clock - lastGeometry > 0.135)) {
+      if (shapeDirty) {
+        stampEnvelope();
+        refreshFill();
+      }
+      refreshSheet();
+      if (shapeDirty)
+        prepMark();
+      shapeDirty = false;
+      lastGeometry = clock;
+    }
+    if (food.visible && (rollDirty && clock - lastFood > 0.085 || !food.count)) {
+      rollModel(food, roll, 0, prep ? clamp((roll.wind - 0.55) / 0.42, 0.005, 1) : 1);
+      rollDirty = false;
+      lastFood = clock;
+    }
+    let sh = getShape(roll), radius = rollRadius(sh.cx, 0, roll, sh);
+    let start = world(0, radius + 0.02, sh.cz), inOil = [potP[0], 0.784 + 0.016 * sin(clock * 2.5), potP[2] + 0.025 * sin(clock * 1.1)];
+    let raw = [1.06, 0.3, -1.19], frying = [potP[0] - 0.04, 0.59, potP[2] + 0.015];
+    skimScale = 0.82;
+    if (stage === "lift") {
+      let t = smooth(age / 2.4);
+      displayPos = lerp3(start, inOil, t);
+      displayPos[1] += 0.86 * sin(t * PI);
+      skimPos = lerp3(raw, sub(displayPos, [0, 0.14, 0]), smooth(age / 0.59));
+      skimScale = mix(0.82, 1, t);
+    } else if (stage === "fry") {
+      displayPos = inOil;
+      skimPos = frying;
+      skimPos[1] += 0.042 * sin(roll.angle);
+      skimScale = 1;
+    } else if (stage === "drain") {
+      let t = smooth(age / 2.6);
+      displayPos = lerp3(inOil, [...SERVE], t);
+      displayPos[1] += 0.97 * sin(t * PI) + 0.3 * t;
+      skimPos = sub(displayPos, [0, 0.17, 0]);
+      skimScale = 1;
+    } else if (stage === "serve" || stage === "eat") {
+      displayPos = shelfPoint(chosen || archive[archive.length - 1] || roll);
+      skimPos = lerp3(sub(SERVE, [0, -0.135, 0]), raw, smooth(age / 1.8));
+    } else {
+      displayPos = start;
+      skimPos = raw;
+    }
+    let fit = Math.min(0.92, 1.77 / (edgeTuck(sh.hi, roll) - edgeTuck(sh.lo, roll)));
+    food.model = transform(...displayPos, 0, stage === "prep" ? 0 : roll.angle, cook ? mix(1, fit, stage === "lift" ? smooth(age / 2.4) : stage === "drain" ? 1 - smooth(age / 2.6) : 1) : 1);
+    let turn = stage === "lift" ? smooth(age / 2.4) : stage === "fry" ? 1 : stage === "drain" ? 1 - smooth(age / 2.6) : 0;
+    skimmer.model = transform(...skimPos, mix(-0.1, 2.58, turn), 0.14 * sin(roll.angle) + (sug?.k === "spoon" ? 0.065 * demo : 0), skimScale);
+    bowlTop.model = transform(0, sug?.k === "bowl" ? (0.037 + 0.069 * demo) * (0.65 + 0.35 * sin(clock * 2.8)) : 0, 0);
+    // The same hands remain attached to their shoulders while demonstrating a short reach.
+    if (clock - lastPose > 1 / 24) {
+      lastPose = clock;
+      let breathe = 0.018 * sin(clock * 1.5), gTarget = [-1.82, 1.08, -2.25], other = [-2.7, 0.81, -1.91];
+      if (prep && sug) {
+        let to = drag ? ground(drag.last[0], drag.last[1], 0.46) : sug.p;
+        if (held)
+          to = world(held.x, 0.61, held.z);
+        let reach = drag ? 0.86 : 0.25 + demo * 0.48;
+        gTarget = lerp3(gTarget, add(to, [-0.04, 0.18, 0]), reach);
+      }
+      if (stage === "eat" && chosen)
+        gTarget = apply(chosen.leftMesh.model, [0, -0.07, 0.02]);
+      gTarget[1] += breathe + impulse * 0.39;
+      let mother = cook ? handlePoint() : [1.78, 0.87, -2.96];
+      if (stage === "eat" && chosen)
+        mother = apply(chosen.rightMesh.model, [0, -0.07, 0.02]);
+      if (["cool", "filter"].includes(stage))
+        mother = apply(pitcher.model, [0.64, 0.1, 0.04]);
+      pose(girl, gTarget, other, clock);
+      pickingSticks.visible = prep && !held && sug?.k === "bowl";
+      pickingSticks.model = transform(gTarget[0], gTarget[1] + 0.055, gTarget[2], -0.21, 0.07 + 0.09 * demo);
+      let helping = ["cool", "filter", "finish"].includes(stage) ? [fx + 0.19, 1.16, fz - 0.15] : [0.84, 0.72, -2.69];
+      pose(mom, add(mother, [0.03, 0.05 + breathe, 0]), helping, clock);
+      refreshOil();
+      fxGeometry();
+      cleanGeometry();
+    }
+  }
+  function resize() {
+    let { clientWidth: w, clientHeight: h } = canvas;
+    if (drag && abs(w / h - aspect) > 0.18)
+      finishDrag({ pointerId: drag.id, preventDefault() {} }, true);
+    let dpr = Math.min(2, devicePixelRatio || 1, quality);
+    canvas.width = Math.max(1, Math.round(w * dpr));
+    canvas.height = Math.max(1, Math.round(h * dpr));
+    updateCamera(0, true);
+    shadowAge = 10;
+  }
+  function render(dt) {
+    shadowAge += dt;
+    if (shadowAge > 0.075 || drag && shadowAge > 0.032) {
+      shadowAge = 0;
+      gl.bindTexture(gl.TEXTURE_2D, null);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+      gl.viewport(0, 0, sm, sm);
+      gl.clearColor(1, 1, 1, 1);
+      gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+      gl.useProgram(depth.p);
+      gl.uniformMatrix4fv(depth.VP, false, lightVP);
+      for (let i = 1;i < 5; i++)
+        gl.disableVertexAttribArray(i);
+      for (let b of batches)
+        if (b.shadow)
+          draw(b, depth);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    gl.clearColor(0.13, 0.19, 0.23, 1);
+    gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+    gl.useProgram(main.p);
+    gl.uniformMatrix4fv(main.VP, false, VP);
+    gl.uniformMatrix4fv(main.lightVP, false, lightVP);
+    gl.uniform3fv(main.eye, eye);
+    gl.uniform2f(main.viewport, canvas.width, canvas.height);
+    let guide = suggestion();
+    gl.uniform3fv(main.focus, guide ? guide.p : [0, 0, 0]);
+    gl.uniform1f(main.cue, guide && !drag ? smooth(idle / 2) * (0.58 + 0.42 * sin(clock * 2.3)) : 0);
+    gl.uniform1f(main.time, clock);
+    gl.uniform1f(main.heat, heat);
+    gl.uniform1f(main.opacity, 1);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, st);
+    gl.uniform1i(main.depthMap, 0);
+    for (let b of batches)
+      draw(b, main);
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    for (let b of clearBatches) {
+      gl.uniform1f(main.opacity, b.opacity ?? 0.35);
+      draw(b, main);
+    }
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+  let raf = 0, stopped = false;
+  function loop(now) {
+    if (stopped || document.hidden)
+      return;
+    let raw = last ? (now - last) * 0.001 : 1 / 60, dt = clamp(raw, 0.001, 0.085);
+    last = now;
+    frame++;
+    frameCost = mix(frameCost, Math.min(100, raw * 1000), 0.032);
+    qualityTime += dt;
+    if (qualityTime > 4) {
+      qualityTime = 0;
+      let next = frameCost > 35 ? Math.max(0.78, quality - 0.22) : frameCost < 18 ? Math.min(1.75, quality + 0.1) : quality;
+      if (next !== quality) {
+        quality = next;
+        resize();
+      }
+    }
+    simulate(dt);
+    dynamics();
+    render(dt);
+    raf = requestAnimationFrame(loop);
+  }
+  function pause() {
+    cancelAnimationFrame(raf);
+    last = 0;
+    if (drag)
+      finishDrag({ pointerId: drag.id, preventDefault() {} }, true);
+    if (ctx?.state === "running")
+      ctx.suspend().catch(() => {});
+  }
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden)
+      pause();
+    else if (!stopped) {
+      last = 0;
+      ctx?.resume().catch(() => {});
+      raf = requestAnimationFrame(loop);
+    }
+  });
+  canvas.addEventListener("webglcontextlost", (e) => {
+    e.preventDefault();
+    stopped = true;
+    pause();
+  });
+  canvas.addEventListener("webglcontextrestored", () => location.reload());
+  for (let b of [room, ware, details, greens, glass, plate, joinery, garden, lamp, board, scraps, pickingSticks, skimmer, girl.body, girl.head, mom.body, mom.head, filterWare, filterGlass, pitcher, freshSheet])
+    b.immutable = true;
+  window.addEventListener("resize", resize);
+  initRoll();
+  resize();
+  raf = requestAnimationFrame(loop);
+})();
+</script></body></html>
