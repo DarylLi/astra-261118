@@ -74,5 +74,9 @@
   "19": {
     "file": "thumbs/astra-261118-19.webp",
     "kind": "real"
+  },
+  "20": {
+    "file": "thumbs/placeholder-20.svg",
+    "kind": "placeholder"
   }
 }
