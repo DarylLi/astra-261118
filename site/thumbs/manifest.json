@@ -62,5 +62,9 @@
   "16": {
     "file": "thumbs/placeholder-16.svg",
     "kind": "placeholder"
+  },
+  "19": {
+    "file": "thumbs/placeholder-19.svg",
+    "kind": "placeholder"
   }
 }
