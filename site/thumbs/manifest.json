@@ -94,5 +94,9 @@
   "24": {
     "file": "thumbs/placeholder-24.svg",
     "kind": "placeholder"
+  },
+  "25": {
+    "file": "thumbs/placeholder-25.svg",
+    "kind": "placeholder"
   }
 }
