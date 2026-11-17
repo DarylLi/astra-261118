@@ -1,0 +1,873 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#c9ae85"><title>ふるん！やきいろオムライス</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent;-webkit-touch-callout:none;user-select:none;-webkit-user-select:none}
+html,body,canvas{margin:0;width:100%;height:100%;overflow:hidden;overscroll-behavior:none;touch-action:none;display:block}
+body{position:fixed;inset:0;background:#d5b791}canvas{position:absolute;inset:0}
+#insets{position:fixed;inset:env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);pointer-events:none}
+</style>
+<canvas aria-label="ふるん！やきいろオムライス"></canvas><div id="insets"></div>
+<script>
+'use strict';
+const canvas=document.querySelector('canvas'), gl=canvas.getContext('webgl',{alpha:false,antialias:true,depth:true,powerPreference:'high-performance'});
+const TAU=Math.PI*2, sin=Math.sin, cos=Math.cos, abs=Math.abs, clamp=(n,a=0,b=1)=>Math.max(a,Math.min(b,n)),mix=(a,b,t)=>a+(b-a)*t;
+const smooth=(a,b,x)=>{let t=clamp((x-a)/(b-a));return t*t*(3-2*t)};
+function random(seed){return ()=>((seed=(1664525*seed+1013904223)>>>0)/4294967296)}
+const assetRand=random(86273), between=(a,b)=>mix(a,b,assetRand());
+const col=h=>[parseInt(h.slice(0,2),16)/255,parseInt(h.slice(2,4),16)/255,parseInt(h.slice(4,6),16)/255];
+const colorMix=(a,b,t)=>a.map((n,i)=>mix(n,b[i],t));
+const norm=(x,y,z)=>{let d=Math.hypot(x,y,z)||1;return [x/d,y/d,z/d]};
+const white=col('f6f0d9'), blue=col('284c7b'), steel=col('a7a8a3'), brass=col('bc914d'), dark=col('343530'), sage=col('8ca795'), walnut=col('a67443');
+const MAT={plain:0,wood:1,steel:2,china:3,linen:4,enamel:5,liquid:6,food:7,tile:8,iron:9,thread:10,egg:11,leaf:12,glass:13};
+// Each object is a batch of indexed surfaces. Materials and tint travel with the vertices.
+class Geometry{
+ constructor(){this.v=[];this.i=[]}
+ vertex(p,n,c,m){this.v.push(...p,...n,...c,m);return this.v.length/10-1}
+ grid(rows,cols,fn,c,m){
+  let base=this.v.length/10;
+  for(let i=0;i<=rows;i++)for(let j=0;j<=cols;j++){
+   let s=fn(i/rows,j/cols);this.vertex(s[0],s[1],s[2]||c,m);
+   if(i&&j){let k=base+i*(cols+1)+j;this.i.push(k-cols-2,k-cols-1,k,k-cols-2,k,k-1)}
+  }
+ }
+ lathe(x,z,profile,c,m,segments=72,stretch=1){
+  const normals=profile.map(([r,y],i)=>{
+   let a=profile[Math.max(0,i-1)],b=profile[Math.min(profile.length-1,i+1)];
+   let before=norm(y-a[1],a[0]-r,0),after=norm(b[1]-y,r-b[0],0);return norm(before[0]+after[0],before[1]+after[1],0)
+  });
+  for(let k=1;k<profile.length;k++){let [r0,y0]=profile[k-1],[r1,y1]=profile[k];
+   this.grid(1,segments,(u,v)=>{let a=v*TAU,r=mix(r0,r1,u),n=normals[k-1+u];return [[x+cos(a)*r,mix(y0,y1,u),z+sin(a)*r*stretch],norm(n[0]*cos(a),n[1],n[0]*sin(a)/stretch)]},c,m)}
+ }
+ sphere(x,y,z,rx,ry,rz,c,m=0,yaw=0,seg=16,rings=10){
+  this.grid(rings,seg,(u,v)=>{let a=v*TAU,b=(u-.5)*Math.PI,l=cos(b)*cos(a),h=sin(b),w=cos(b)*sin(a);
+   return [[x+l*rx*cos(yaw)-w*rz*sin(yaw),y+h*ry,z+l*rx*sin(yaw)+w*rz*cos(yaw)],norm(l/rx*cos(yaw)-w/rz*sin(yaw),h/ry,l/rx*sin(yaw)+w/rz*cos(yaw))]},c,m)
+ }
+ // Bevelled rounded rectangle with independently shaped top and sides.
+ slab(x,y,z,w,h,d,r,c,m,yaw=0,bevel=.045){
+  let b=Math.min(bevel,h*.45,w*.18,d*.18),layers=[[b,0],[b*.28,b*.28],[0,b],[0,h-b],[b*.28,h-b*.28],[b,h]];
+  let points=(inset,height,angle,corner,ny)=>{
+   let rr=Math.max(.001,r-inset),cx=(corner===0||corner===3?1:-1)*(w/2-r),cz=(corner<2?1:-1)*(d/2-r);
+   let X=cx+rr*cos(angle),Z=cz+rr*sin(angle),N=norm(cos(angle),ny,sin(angle));
+   return [[x+X*cos(yaw)-Z*sin(yaw),y+height,z+X*sin(yaw)+Z*cos(yaw)],[N[0]*cos(yaw)-N[2]*sin(yaw),N[1],N[0]*sin(yaw)+N[2]*cos(yaw)]]
+  };
+  let perimeter=[];for(let k=0;k<4;k++)for(let j=0;j<=6;j++)perimeter.push([Math.PI*.5*(k+j/6),k]);
+  for(let l=1;l<layers.length;l++){let [f,H]=layers[l-1],[g,J]=layers[l],ny=(g-f)/(J-H||1);
+   this.grid(1,perimeter.length,(u,v)=>{let [a,k]=perimeter[Math.round(v*perimeter.length)%perimeter.length];return points(mix(f,g,u),mix(H,J,u),a,k,ny)},c,m)}
+  let mid=this.vertex([x,y+h,z],[0,1,0],c,m),a0=this.v.length/10;
+  for(let [a,k] of perimeter)this.vertex(points(b,h,a,k,0)[0],[0,1,0],c,m);
+  for(let j=0;j<perimeter.length;j++)this.i.push(mid,a0+j,a0+(j+1)%perimeter.length)
+ }
+ tube(path,r,c,m=0,sides=8){
+  let rows=path.length-1;
+  this.grid(rows,sides,(u,v)=>{let i=Math.round(u*rows),p=path[i],a=path[Math.max(0,i-1)],b=path[Math.min(rows,i+1)],t=norm(b[0]-a[0],b[1]-a[1],b[2]-a[2]);
+   let e=abs(t[1])>.98?[1,0,0]:norm(-t[2],0,t[0]),f=[t[1]*e[2]-t[2]*e[1],t[2]*e[0]-t[0]*e[2],t[0]*e[1]-t[1]*e[0]];
+   let n=e.map((v0,j)=>v0*cos(v*TAU)+f[j]*sin(v*TAU)),rad=typeof r==='function'?r(u):r;return [p.map((v0,j)=>v0+n[j]*rad),n]},c,m)
+ }
+ ring(x,y,z,r,thick,c,m=3,stretch=1){let p=[];for(let i=0;i<=72;i++){let a=i*TAU/72;p.push([x+r*cos(a),y,z+r*stretch*sin(a)])}this.tube(p,thick,c,m,8)}
+}
+const staticAssets=new Map();
+function mesh(build){let g=new Geometry();build(g);let m=upload(g);staticAssets.set(m,build);return m}
+function upload(g,old){
+ let a=old||{v:gl.createBuffer(),i:gl.createBuffer()},v=new Float32Array(g.v),idx=new Uint16Array(g.i);
+ if(v.length/10>65535)throw Error('Geometry exceeds index range');
+ gl.bindBuffer(gl.ARRAY_BUFFER,a.v);gl.bufferData(gl.ARRAY_BUFFER,v,old?gl.DYNAMIC_DRAW:gl.STATIC_DRAW);
+ gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,a.i);gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,idx,old?gl.DYNAMIC_DRAW:gl.STATIC_DRAW);
+ a.count=idx.length;return a
+}
+function dispose(m){if(m){staticAssets.delete(m);gl.deleteBuffer(m.v);gl.deleteBuffer(m.i)}}
+const vertexSource=`
+attribute vec3 pos,normal,tint;attribute float material;
+uniform mat4 model;uniform vec4 view;uniform vec2 lens;uniform float shadowPass;
+varying vec3 world,N,C,L;varying float M;
+void main(){
+ vec4 w=model*vec4(pos,1.);world=w.xyz;L=pos;N=normalize(mat3(model)*normal);C=tint;M=material;
+ vec3 q=w.xyz-vec3(view.x,0.,view.y);
+ gl_Position=vec4(q.x*view.z,(q.y*lens.y-q.z*lens.x)*view.w,-(q.y*lens.x+q.z*lens.y)*.025,1.);
+ if(shadowPass>.5)gl_Position=vec4((w.x+.72*w.y)/24.,(w.z+.53*w.y)/23.,-w.y*.12,1.);
+}`;
+const fragmentSource=`
+precision highp float;
+varying vec3 world,N,C,L;varying float M;
+uniform vec4 contacts[8];uniform sampler2D grain,shadowMap;uniform float shadowPass,time,glint,quality,breakfast;
+float noise(vec2 p){return texture2D(grain,p).r;}
+float broad(vec2 p){return texture2D(grain,p).g;}
+float shadow(){
+ vec2 uv=vec2((world.x+.72*world.y)/48.+.5,(world.z+.53*world.y)/46.+.5);
+ float h=world.y+.044,sum=0.;float center=texture2D(shadowMap,uv).r*12.-1.;
+ float spread=clamp((center-h)*.004+.0012,.0012,.011);
+ for(int i=0;i<8;i++){float a=float(i)*2.39996;vec2 d=vec2(cos(a),sin(a))*sqrt((float(i)+.5)/8.)*spread;
+ sum+=smoothstep(-.04,.07,texture2D(shadowMap,uv+d).r*12.-1.-h);}
+ return sum*.125;
+}
+void main(){
+ if(shadowPass>.5){gl_FragColor=vec4(vec3((world.y+1.)/12.),1.);return;}
+ vec3 n=normalize(N),c=C;vec2 p=world.xz;float m=floor(M+.5),fine=noise((L.xz+L.y*.47)*2.8),rough=.58,metal=0.;
+ if(m==1.){vec2 wood=L.xz+L.y*.41;float knot=broad(wood*vec2(.019,.09));
+ float w=wood.y+.15*sin(wood.x*.45+knot*3.)+.21*knot;
+ float rings=broad(vec2(wood.x*.014,w*.22)),fiber=noise(vec2(wood.x*.015,w*.95));
+ float latewood=smoothstep(.63,.88,rings);
+ float arcs=sin(w*24.+knot*13.+7.*rings+.8*sin(wood.x*.61));
+ c*=.956+.13*rings+.068*(fiber-.5)-.088*latewood-.027*smoothstep(.53,.94,arcs)+.008*sin(w*120.+rings*10.);rough=.56;}
+ if(m==2.||m==9.){metal=m==2.?.91:.70;rough=m==2.?.2:.44;c*=.93+.09*fine;}
+ if(m==3.||m==5.){rough=m==3.?.16:.27;c*=.986+.023*fine;}
+ if(m==4.||m==10.){float a=sin(L.x*270.),b=sin(L.z*280.);c*=.955+.035*a*b+.034*fine;rough=.91;}
+ if(m==6.||m==13.){rough=.095;c*=.975+.05*fine;}
+ if(m==7.||m==11.||m==12.){c*=.94+.085*fine;rough=m==11.?.27:(m==12.?.31:.52);}
+ if(m==8.){rough=.23;c*=.98+.028*noise(L.xz*.8+L.y*.4);}
+ if(m==11.){
+  float v=broad(L.xz*1.82),cell=noise(L.xz*.095);float op=clamp((M-11.)*2.5,0.,1.);
+  c*=.984+.046*v+.02*cell;
+  n=normalize(n+vec3((v-.5)*.33,0.,(broad(L.zx*1.65+.23)-.5)*.31)*op);
+  rough=mix(.085,.32,op);
+ }
+ vec3 light=normalize(vec3(-.72,1.,-.53)),eye=normalize(vec3(.02,.82,.58)),halfv=normalize(light+eye);
+ float diff=max(0.,dot(light,n)),up=n.y*.5+.5,shade=shadow();
+ float sun=smoothstep(-.18,.4,sin((p.x+p.y*.52+time*.0009)*.61+.55));
+ float satin=pow(max(0.,dot(n,halfv)),mix(126.,8.,rough));
+ vec3 refl=reflect(-eye,n);
+ float sky=smoothstep(-.46,.83,refl.y);
+ float window=exp(-pow((refl.x+.46)/.48,4.))*smoothstep(-.04,.27,refl.y)*(1.-smoothstep(.89,1.03,refl.y));
+ float bars=.75+.25*smoothstep(.015,.065,abs(fract((refl.x+.91)*3.1)-.50));
+ float daylight=smoothstep(-.42,.57,sin((p.x-p.y*.51)*.61+.83));
+ float beam=1.-smoothstep(.12,.78,abs(mod(p.x-p.y*.55+4.,7.9)-3.95));
+ float ambient=.65+.21*up;
+ vec3 base=c*(ambient+(.16+.14*daylight)*diff*(1.-shade))*(1.-.23*shade);
+ if(m==8.)base=c*(.89+.052*broad(L.xy*.38)+.062*daylight);
+ if(m==1.&&world.y<.005){
+  float occlusion=0.;
+  for(int i=0;i<8;i++){vec2 offset=(p-contacts[i].xy)/max(vec2(.01),contacts[i].zw);
+   occlusion=max(occlusion,exp(-dot(offset,offset)*2.22));}
+  base*=1.-.24*occlusion;
+  base*=vec3(1.,.995,.972)+vec3(.055,.035,.008)*daylight-.066*beam;
+ }
+ vec3 reflection=vec3(.29,.30,.30)+vec3(.43,.45,.45)*sky+vec3(.63,.60,.52)*window*bars;
+ reflection+=vec3(.30,.30,.28)*exp(-pow((refl.y+.17)/.14,2.));
+ if(m==9.&&quality>.76){
+  float radial=length(L.xz),a=atan(L.z,L.x);
+  float brush=.019*sin(radial*217.+3.*broad(L.xz*.49))+.017*(fine-.5);
+  float sheen=pow(max(0.,cos(a-2.45)),3.)*.20+pow(max(0.,cos(a+.53)),7.)*.15;
+  reflection+=vec3(sheen+brush+(.035*broad(L.xz*.51)));
+  base*=.89+.10*broad(L.xz*.29)+brush;
+ }
+ base=mix(base,c*(reflection+.15*diff*(1.-shade)),metal);
+ base+=vec3(1.,.94,.83)*satin*(1.-shade)*(.055+.29*(1.-rough));
+ base+=vec3(.97,.96,.91)*window*bars*(1.-rough)*(.044+.16*metal);
+ base+=breakfast*vec3(.025,.014,.003)*up;
+ base+=glint*vec3(.12,.086,.027)*(.3+.7*pow(1.-abs(dot(n,eye)),2.));
+ gl_FragColor=vec4(clamp(base,0.,1.),m==11.?mix(.47,1.,clamp((M-11.)*2.5,0.,1.)):1.);
+}`;
+function shader(type,src){let s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);if(!gl.getShaderParameter(s,gl.COMPILE_STATUS))throw Error(gl.getShaderInfoLog(s));return s}
+const U={},A={},contactLocations=[];let program,grainTex,shadows,depth,shadeTex,shadowSize=0;
+function initializeGraphics(size){
+ program=gl.createProgram();gl.attachShader(program,shader(gl.VERTEX_SHADER,vertexSource));gl.attachShader(program,shader(gl.FRAGMENT_SHADER,fragmentSource));gl.linkProgram(program);if(!gl.getProgramParameter(program,gl.LINK_STATUS))throw Error(gl.getProgramInfoLog(program));gl.useProgram(program);
+for(let k of ['model','view','lens','shadowPass','grain','shadowMap','time','glint','quality','breakfast'])U[k]=gl.getUniformLocation(program,k);
+for(let k of ['pos','normal','tint','material']){A[k]=gl.getAttribLocation(program,k);gl.enableVertexAttribArray(A[k])}
+
+ for(let i=0;i<8;i++)contactLocations[i]=gl.getUniformLocation(program,'contacts['+i+']');
+ grainTex=noiseTexture();gl.uniform1i(U.grain,0);gl.uniform1i(U.shadowMap,1);
+ shadows=gl.createFramebuffer();depth=gl.createRenderbuffer();shadeTex=gl.createTexture();shadowSize=0;
+ resizeShadow(size);gl.enable(gl.DEPTH_TEST);gl.depthFunc(gl.LEQUAL)
+}
+function noiseTexture(){
+ let size=256,a=new Uint8Array(size*size*4),fields=[4,9,24,64].map(n=>({n,a:Float32Array.from({length:n*n},assetRand)}));
+ function lattice(f,x,y){let X=x*f.n/size,Y=y*f.n/size,i=Math.floor(X),j=Math.floor(Y),u=smooth(0,1,X-i),v=smooth(0,1,Y-j);
+  const at=(i,j)=>f.a[(j%f.n)*f.n+i%f.n];return mix(mix(at(i,j),at(i+1,j),u),mix(at(i,j+1),at(i+1,j+1),u),v)}
+ for(let y=0;y<size;y++)for(let x=0;x<size;x++){let k=4*(y*size+x);a[k]=assetRand()*255;a[k+1]=255*(.40*lattice(fields[0],x,y)+.34*lattice(fields[1],x,y)+.19*lattice(fields[2],x,y)+.07*lattice(fields[3],x,y));a[k+3]=255}
+ let t=gl.createTexture();gl.bindTexture(gl.TEXTURE_2D,t);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.UNSIGNED_BYTE,a);gl.generateMipmap(gl.TEXTURE_2D);gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);return t
+}
+function resizeShadow(size){if(shadowSize===size)return;shadowSize=size;gl.bindTexture(gl.TEXTURE_2D,shadeTex);gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,size,size,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+ for(let p of [gl.TEXTURE_MIN_FILTER,gl.TEXTURE_MAG_FILTER])gl.texParameteri(gl.TEXTURE_2D,p,gl.LINEAR);
+ for(let p of [gl.TEXTURE_WRAP_S,gl.TEXTURE_WRAP_T])gl.texParameteri(gl.TEXTURE_2D,p,gl.CLAMP_TO_EDGE);
+ gl.bindFramebuffer(gl.FRAMEBUFFER,shadows);gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,shadeTex,0);
+ gl.bindRenderbuffer(gl.RENDERBUFFER,depth);gl.renderbufferStorage(gl.RENDERBUFFER,gl.DEPTH_COMPONENT16,size,size);gl.framebufferRenderbuffer(gl.FRAMEBUFFER,gl.DEPTH_ATTACHMENT,gl.RENDERBUFFER,depth);gl.bindFramebuffer(gl.FRAMEBUFFER,null)}
+initializeGraphics(1536);
+const objects=[];
+function put(mesh,x,y,z,yaw=0,scale=1,tilt=0,roll=0,glow=0,casts=true){
+ let a=cos(yaw),b=sin(yaw),c=cos(tilt),d=sin(tilt),e=cos(roll),f=sin(roll);
+ let mat=new Float32Array([scale*(a*e+b*d*f),scale*c*f,scale*(b*e-a*d*f),0,scale*(-a*f+b*d*e),scale*c*e,scale*(-b*f-a*d*e),0,-scale*b*c,scale*d,scale*a*c,0,x,y,z,1]);
+ objects.push({mesh,mat,glow,casts})
+}
+function drawObjects(shadow){
+ gl.uniform1f(U.shadowPass,shadow?1:0);
+ if(shadow)gl.disable(gl.BLEND);else{gl.enable(gl.BLEND);gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA)}
+ for(let o of objects){if(!o.mesh?.count||(shadow&&!o.casts))continue;gl.bindBuffer(gl.ARRAY_BUFFER,o.mesh.v);gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,o.mesh.i);
+  gl.vertexAttribPointer(A.pos,3,gl.FLOAT,false,40,0);gl.vertexAttribPointer(A.normal,3,gl.FLOAT,false,40,12);gl.vertexAttribPointer(A.tint,3,gl.FLOAT,false,40,24);gl.vertexAttribPointer(A.material,1,gl.FLOAT,false,40,36);
+  gl.uniformMatrix4fv(U.model,false,o.mat);gl.uniform1f(U.glint,o.glow);gl.drawElements(gl.TRIANGLES,o.mesh.count,gl.UNSIGNED_SHORT,0)}
+}
+// Hand-built crockery and utensils. The cobalt strokes follow each curved rim.
+function crockery(g,r,h,plate=false){
+ let prof=plate?[[.02,.045],[.51,.045],[.56,.02],[.62,.035],[.64,.09],[.95,.17],[1,.205],[1.008,.229],[.992,.248],[.96,.249],[.78,.16],[.64,.117],[0,.116]]:
+ [[.01,.05],[.39,.05],[.42,.015],[.48,.025],[.53,.12],[.68,.22],[.81,.39],[.92,.61],[.997,.91],[1,.98],[.985,1.005],[.955,1],[.942,.93],[.86,.65],[.75,.43],[.59,.26],[.34,.178],[0,.166]];
+ let H=plate?1:h;g.lathe(0,0,prof.map(([x,y])=>[x*r,y*H]),white,3);
+ if(plate){g.ring(0,.254,0,.978*r,.014,blue);g.ring(0,.228,0,.905*r,.013,blue);g.ring(0,.207,0,.868*r,.009,blue)}
+ else{g.ring(0,h*.955,0,.997*r,.0185,blue);g.ring(0,h*.873,0,.988*r,.009,blue);g.ring(0,h*.271,0,.722*r,.018,blue)}
+ for(let j=0;j<(plate?24:26);j++){
+  let a=j*TAU/(plate?24:26);
+  if(plate){
+   for(let k of [-1,1]){let path=[];for(let i=0;i<=5;i++){let t=i/5,ang=a+k*t*.065,rad=r*(.925+.02*sin(t*Math.PI));path.push([rad*cos(ang),.238+.006*sin(t*Math.PI),rad*sin(ang)])}g.tube(path,t=>.003+.012*sin(t*Math.PI),blue,3,5)}
+  }else{
+   for(let k of [-1,1]){let path=[];for(let i=0;i<=6;i++){let t=i/6,ang=a+k*.062*sin(t*Math.PI*.64),rad=r*(.807+.154*t+.012*sin(t*Math.PI));path.push([rad*cos(ang),h*(.385+t*.39),rad*sin(ang)])}g.tube(path,t=>.004+.017*sin(t*Math.PI),blue,3,6)}
+  }
+ }
+}
+const bowl=mesh(g=>crockery(g,1.13,.94)),riceBowl=mesh(g=>crockery(g,1.08,.83)),plate=mesh(g=>crockery(g,1.56,1,true));
+const eggPool=mesh(g=>{g.lathe(0,0,[[.01,0],[.93,.003],[.937,.014],[.9,.026],[.7,.02],[.4,.033],[0,.018]],col('f2b334'),6);for(let j=0;j<8;j++){
+ let x=between(-.6,.55),z=between(-.58,.58);g.ring(x,.035,z,between(.015,.053),.006,col('ffe19a'),6,.8)}
+ for(let j=0;j<3;j++){let p=[];for(let i=0;i<28;i++){let a=i/27*2.2+j*1.6,r=.35+.075*a+j*.06;p.push([r*cos(a),.037,r*sin(a)])}g.tube(p,t=>.002+.021*sin(t*Math.PI),col('f9cf73'),6,7)}
+});
+function riceGrains(g,n,r,h,seed){
+ let rand=random(seed),colors=['f9e4b4','fff1d5','ecd3a5','e7863f','74904c','a56c44'].map(col);
+ g.sphere(0,.025,0,r*.98,h*.94,r*.86,col('dfbc8b'),7,0,30,16);
+ for(let j=0;j<n;j++){
+  let a=rand()*TAU,rr=Math.sqrt(rand()),x=rr*cos(a)*r,z=rr*sin(a)*r*.88,y=h*Math.sqrt(1-rr*rr)+rand()*.045+.025;
+  let s=.8+rand()*.4,t=rand(),c=t<.81?colors[Math.floor(rand()*3)]:t<.89?colors[3]:t<.95?colors[4]:colors[5];
+  if(t>=.81&&t<.89)g.slab(x,y-.03,z,.095*s,.075*s,.08*s,.018,c,7,rand()*TAU,.01);
+  else g.sphere(x,y,z,.078*s,.036*s,.033*s,c,7,rand()*TAU,7,4)
+ }
+}
+const riceHeap=mesh(g=>riceGrains(g,590,.98,.46,5551)),filling=mesh(g=>riceGrains(g,380,.93,.44,8888));
+function cloth(g,w,d,stripe){
+ let nx=58,nz=42,linen=col('e6dfc7');
+ function point(u,v){let x=(u-.5)*w,z=(v-.5)*d,y=.045+.022*sin(x*8+sin(z*3))+.018*cos(z*7+x)+.062*Math.exp(-Math.pow((x-.27*z-.33)*5,2));return [x+.035*sin(v*8),y,z+.034*sin(u*9)]}
+ g.grid(nz,nx,(v,u)=>{let distance=Math.min(u,1-u)*w,band=(distance>.15&&distance<.215)||(distance>.26&&distance<.31)||(distance>.335&&distance<.385);
+ return [point(u,v),norm(-.09*cos(u*18),1,.07*sin(v*17)),band?stripe:linen]},linen,4);
+ for(let j=0;j<75;j++){let u=j/74;for(let v of [0,1]){let p=point(u,v);g.tube([p,[p[0]+between(-.014,.014),.023,p[2]+(v?1:-1)*between(.035,.085)]],.008,linen,4,4)}}
+}
+const napkin=mesh(g=>cloth(g,3.15,2.63,blue)),teaTowel=mesh(g=>cloth(g,1.73,3.84,col('849e86')));
+const stove=mesh(g=>{
+ g.slab(0,.06,0,5.06,.16,4.65,.38,dark,9,0,.08);
+ g.slab(0,.18,0,5.28,.53,4.84,.42,sage,5,0,.135);
+ g.slab(0,.65,0,5.16,.102,4.74,.36,col('a5bbab'),5,0,.047);
+ g.lathe(0,-.18,[[.1,.75],[1.78,.75],[1.92,.81],[1.93,.86],[1.8,.90],[1.61,.84],[.1,.84]],col('575b57'),2);
+ g.lathe(0,-.18,[[.1,.84],[1.16,.84],[1.21,.93],[1.19,.99],[.01,.99]],dark,9);
+ for(let j=0;j<8;j++){let a=j*TAU/8;g.slab(1.65*cos(a),.81,1.65*sin(a)-.18,.87,.24,.135,.054,col('303634'),9,a,.044)}
+ for(let j=0;j<14;j++)g.slab(-2.43,.37,-1.54+j*.18,.025,.16,.068,.016,col('597665'),9);
+ for(let j=0;j<12;j++){let x=.35+j*.115;g.slab(x,.316,2.408,.054,.245,.019,.008,col('4e6458'),9,0,.007)}
+ for(let x of [-2.24,2.24])for(let z of [-1.99,1.99])g.sphere(x,.748,z,.051,.019,.051,steel,2,0,12,5);
+});
+const knobBase=mesh(g=>{g.lathe(0,0,[[.04,0],[.46,0],[.47,.045],[.43,.09],[.12,.09]],steel,2);
+ for(let i=0;i<=8;i++){let a=-2.72+i*.465;g.sphere(.54*cos(a),.015,.54*sin(a),.026+i*.002,.011,.026+i*.002,col('4b6559'),5,0,8,4)}});
+const knob=mesh(g=>{g.lathe(0,0,[[.02,.05],[.365,.05],[.395,.11],[.38,.27],[.334,.315],[.01,.315]],col('e9dfbc'),3);
+ g.slab(0,.291,-.025,.115,.065,.52,.052,col('ebe2c9'),3);g.slab(0,.351,-.193,.056,.009,.081,.018,brass,2)});
+const skillet=mesh(g=>{
+ g.lathe(0,0,[[.01,0],[1.54,0],[1.77,.055],[1.96,.18],[2.14,.40],[2.25,.63],[2.27,.675]],steel,2,104);
+ g.lathe(0,0,[[2.27,.677],[2.265,.707],[2.238,.717],[2.211,.694],[2.19,.628],[2.11,.47],[1.97,.28],[1.83,.174],[1.67,.139],[1.42,.127],[.01,.122],[0,.122]],col('656660'),9,104);
+ g.ring(0,.701,0,2.246,.024,col('e2dfd2'),2);
+
+ // Tang, ferrule, walnut grip and the hanging eye.
+ g.slab(2.37,.435,0,1.06,.19,.51,.13,steel,2,0,.059);
+ g.slab(2.82,.451,0,.45,.24,.39,.10,col('b8b9ae'),2,0,.07);
+ g.slab(3.66,.435,0,1.65,.30,.41,.19,col('94623d'),1,0,.105);
+ g.slab(3.64,.716,0,1.42,.022,.25,.11,col('a8784e'),1,0,.009);
+ for(let x of [3.17,4.19])g.sphere(x,.743,0,.052,.012,.052,brass,2,0,12,5);
+ for(let z of [-.23,.23])g.sphere(2.079,.453,z,.062,.075,.05,steel,2);
+});
+const butter=mesh(g=>{g.sphere(0,.016,0,.51,.019,.34,col('d1af59'),6,.33,34,8);g.slab(0,.022,0,.36,.13,.27,.06,col('f3d478'),7,-.15,.047);
+ for(let j=0;j<15;j++){let a=j*2.4,r=.29+between(0,.10);g.sphere(r*cos(a),.017,r*.63*sin(a),.02,.016,.019,col('dfcd8b'),6,0,8,4)}});
+const turner=mesh(g=>{
+ // A single sheet of polished steel with three open slots.
+ g.slab(0,.13,-.58,.78,.053,.13,.058,steel,2);
+ for(let x of [-.337,-.119,.119,.337])g.slab(x,.126,-.08,.122,.062,1.03,.06,steel,2);
+ g.slab(0,.132,.41,.77,.066,.21,.085,steel,2);
+ g.tube([[0,.153,.44],[0,.18,.65],[0,.25,.91],[0,.30,1.31]],.084,steel,2,12);
+ g.slab(0,.19,1.8,.295,.23,1.38,.14,walnut,1,0,.085);
+ for(let z of [1.37,2.22])g.sphere(0,.424,z,.038,.01,.038,brass,2,0,10,5)
+});
+const burnerGlow=mesh(g=>{for(let j=0;j<44;j++){let a=j*TAU/44;g.sphere(1.52*cos(a),.04,1.52*sin(a),.043,.126,.043,col('7ebcbe'),6,0,7,5)}});
+function leaf(g,x,y,z,length,width,a,c){
+ let shape=(u,v)=>{let t=v*2-1,rad=sin(Math.PI*u)**.8,dx=length*u,dz=t*width*rad;return [[x+dx*cos(a)-dz*sin(a),y+.18*length*sin(u*Math.PI)-.085*abs(t)*rad+.05*length*u,z+dx*sin(a)+dz*cos(a)],norm(-.13*cos(u*Math.PI),1,.23*t),colorMix(c,col('adb773'),.13*rad*(1-abs(t)))]};
+ g.grid(10,6,shape,c,12);let p=[];for(let j=0;j<=9;j++){let q=shape(j/9,.5)[0];q[1]+=.006;p.push(q)}g.tube(p,.008,col('a0aa66'),12,5)
+}
+const vine=mesh(g=>{
+ let stalk=col('708242');g.tube([[-1,.08,-.18],[-.5,.135,-.04],[0,.17,-.09],[.49,.15,-.30],[.92,.12,-.25]],.024,stalk,12);
+ for(let j=0;j<12;j++){let x=-.93+j*.155,z=-.16+.11*sin(j*.43),a=(j%2?1:-1)*between(.47,1.02);leaf(g,x,.15,z,between(.42,.73),between(.12,.21),a,col(j%3?'55733a':'738d49'))}
+});
+const tomatoes=mesh(g=>{for(let [x,z,r] of [[-.46,.12,.34],[.09,.33,.37],[.44,-.22,.32],[-.16,-.38,.29]]){
+ g.sphere(x,r*.86,z,r,r*.87,r*.94,col('cd4f30'),6,0,26,16);for(let k=0;k<5;k++)leaf(g,x,r*1.70,z,r*.69,.032,k*TAU/5+.25,col('496239'));
+ g.tube([[x,r*1.71,z],[x-.035,.69,z-.07],[0,.66,-.07]],.02,col('54673a'),12,7)
+}});
+const cruet=mesh(g=>{let olive=col('a5944e');g.lathe(0,0,[[0,.01],[.28,.01],[.32,.06],[.34,.16],[.34,.83],[.32,.92],[.18,1.02],[.13,1.11],[.13,1.36],[.16,1.38],[.16,1.45],[.12,1.46],[0,1.45]],olive,13,48);
+ g.lathe(0,0,[[.122,1.41],[.126,1.55],[.115,1.57],[0,1.57]],walnut,1,32);g.ring(0,.11,0,.335,.012,col('c8bd88'),13)});
+const breakfastEggs=mesh(g=>{g.lathe(0,0,[[0,.014],[.71,.014],[.91,.11],[.96,.21],[.95,.25],[.88,.25],[.7,.13],[0,.11]],walnut,1,56,.74);
+ for(let [x,z,h,c] of [[-.35,.07,.37,'d4ae85'],[.10,-.23,.39,'eedbc0'],[.37,.22,.30,'d6b38e']])g.sphere(x,.36,z,.24,h,.245,col(c),7,-.3,24,16)
+});
+const bottle=mesh(g=>{g.lathe(0,0,[[.01,.02],[.31,.02],[.37,.09],[.39,.22],[.38,.93],[.34,1.11],[.18,1.24],[.15,1.32],[.01,1.32]],col('bb3a25'),6,52,.78);
+ g.lathe(0,0,[[.01,1.25],[.2,1.25],[.205,1.40],[.153,1.44],[.055,1.65],[.039,1.68],[0,1.68]],col('f2e4bd'),3,40);
+ for(let i=0;i<20;i++){let a=i*TAU/20;g.tube([[.2*cos(a),1.27,.2*sin(a)],[.2*cos(a),1.395,.2*sin(a)]],.008,white,3,4)}});
+const fork=mesh(g=>{g.slab(0,.07,.32,.14,.055,1.13,.067,steel,2);g.slab(0,.079,-.31,.25,.045,.22,.09,steel,2);
+ for(let i=0;i<4;i++)g.tube([[i*.067-.10,.096,-.35],[i*.067-.10,.109,-.50],[i*.067-.10,.13,-.68]],t=>.019-.012*t,steel,2,6)});
+const sessionSeed=Math.floor(Math.random()*1e8),playRand=random(sessionSeed);
+let W=1,H=1,unit=1,cx=0,cz=0,zoom=1,portrait=false,layout={},tableOffset=0;
+const down=.819,front=.574,panY=1.065,eggY=panY+.145;
+let now=0,lastTouch=0,lastAction=0,mode='cook',transition=0,heat=.48,quality=1,pixelRatio=1,serial=0;
+const angles=64,rings=16,cellCount=(rings+1)*angles;
+function newEgg(small=false){
+ return {small,total:0,capacity:(small?.67:1)*(.91+playRand()*.17),phase:playRand()*TAU,
+  mass:new Float32Array(cellCount),set:new Float32Array(cellCount),brown:new Float32Array(cellCount),thick:new Float32Array(cellCount),fluff:new Float32Array(cellCount),
+  radius:new Float32Array(angles).fill(.035),target:new Float32Array(angles).fill(.035),
+  x:0,z:0,tx:0,tz:0,rice:false,rx:0,rz:0,rh:.8+playRand()*.35,spread:1,folds:[],lift:null,wave:0,
+  hitX:0,hitZ:0,leak:0,leakDir:0,leakFlow:0,crisps:0,plated:false,settle:0,mesh:null,lastMesh:-1,shape:[],strokes:[],mark:null,signTime:0,rare:playRand()<.13,peek:false}
+}
+let egg=newEgg(),dishes=[],seats=[null,null,null],seatOrder=[0,1,2],chosen=[],family=[];
+let heatTouched=false,held=null,selected='',pour=null,panTilt=0,panSwing=0,tiltGoal=0,bowlKick=0,riceKick=0,knobKick=0,toolKick=0,plateKick=0,bottleKick=0,sceneNudge=0;
+let serveFlight=null,servingSeat=0,tableWanted=false,pulseTarget='',nextDish=0;
+const particles=[];const audioState={ctx:null,noise:null,sizzle:null,filter:null,last:-1};
+function unlock(){
+ try{if(!audioState.ctx){let a=audioState.ctx=new (window.AudioContext||window.webkitAudioContext)(),buf=a.createBuffer(1,a.sampleRate,a.sampleRate),v=buf.getChannelData(0),r=random(761);for(let i=0;i<v.length;i++)v[i]=r()*2-1;
+ audioState.noise=buf;let src=a.createBufferSource(),f=a.createBiquadFilter(),gain=a.createGain();src.buffer=buf;src.loop=true;f.type='bandpass';f.frequency.value=2600;f.Q.value=.52;gain.gain.value=.00001;src.connect(f).connect(gain).connect(a.destination);src.start();audioState.sizzle=gain;audioState.filter=f}
+ if(audioState.ctx.state!=='running')audioState.ctx.resume().catch(()=>{})
+ }catch{}
+}
+function sound(kind,power=.6){
+ let a=audioState.ctx;if(!a||a.state!=='running')return;
+ let t=a.currentTime,g=a.createGain(),s,volume=.085,duration=.22;
+ if(kind==='sizzle'||kind==='crack'){s=a.createBufferSource();s.buffer=audioState.noise;let f=a.createBiquadFilter();f.type='highpass';f.frequency.value=kind==='crack'?3200:1400+heat*1500;s.connect(f).connect(g);duration=kind==='crack'?.043:.24;volume=kind==='crack'?.105:.07}
+ else{s=a.createOscillator();s.type='sine';let pitch=kind==='china'?1090:kind==='fork'?1640:kind==='wood'?185:kind==='sauce'?260:119;
+ s.frequency.setValueAtTime(pitch*(1+.13*power),t);s.frequency.exponentialRampToValueAtTime(pitch*(kind==='soft'?.49:.91),t+.15);s.connect(g);duration=kind==='china'||kind==='fork'?.43:.20;volume=kind==='fork'?.031:.073}
+ g.gain.setValueAtTime(.00002,t);g.gain.exponentialRampToValueAtTime(Math.max(.002,volume*clamp(power,.12,1)),t+.007);g.gain.exponentialRampToValueAtTime(.00002,t+duration);
+ g.connect(a.destination);s.start(t);s.stop(t+duration+.01);s.onended=()=>{s.disconnect();g.disconnect()}
+}
+function puff(x,z,count,kind='bubble'){
+ for(let j=0;j<count&&particles.length<40;j++)particles.push({x:x+(playRand()-.5)*.22,z:z+(playRand()-.5)*.22,t:0,life:kind==='vapor'?1.2:.38+playRand()*.65,r:.018+playRand()*.033,kind})
+}
+function deposit(e,x,z,amount){
+ amount=Math.min(amount,e.capacity-e.total);if(amount<=0)return;
+ let d=Math.hypot(x,z);if(d>1.56){x*=1.56/d;z*=1.56/d}
+ let first=e.total===0;e.total+=amount;
+ if(first){e.x=e.tx=x*.67;e.z=e.tz=z*.67}
+ e.tx=mix(e.tx,x*.60,amount/e.total*.5);e.tz=mix(e.tz,z*.60,amount/e.total*.5);
+ let radius=.25+1.47*Math.sqrt(e.total/e.capacity)*(e.small?.83:1);
+ for(let j=0;j<angles;j++){
+  let a=TAU*j/angles,dx=cos(a),dz=sin(a),along=(x-e.x)*dx+(z-e.z)*dz,irregular=1+.036*sin(5*a+e.phase)+.018*cos(9*a-e.phase);
+  let maxR=1.79-(dx*e.x+dz*e.z),r=Math.min(maxR,(radius+.47*along)*irregular);
+  e.target[j]=Math.max(e.target[j],r);if(first)e.radius[j]=Math.max(.08,r*.7);
+  for(let i=0;i<=rings;i++){let k=i*angles+j,u=i/rings,dist=(u*r*dx+e.x-x)**2+(u*r*dz+e.z-z)**2;
+   let add=amount*(.27+1.2*Math.exp(-dist*1.3));e.set[k]*=1-.66*add/(.12+e.mass[k]+add);e.mass[k]+=add;e.thick[k]+=add*(1.22-.68*heat)}
+ }
+ e.hitX=x;e.hitZ=z;e.wave=Math.max(e.wave,.58);puff(x,z,first?6:1)
+}
+function startPour(x=0,z=0){if(egg.total>=egg.capacity-.002){bowlKick=.25;return}bowlKick=1;selected='bowl';
+ deposit(egg,x,z,Math.min(.091,egg.capacity*.14));pour={x,z,left:.74,rate:egg.capacity*.62};sound('sizzle',.65)}
+function grainHeight(e,x,z){if(!e.rice)return 0;let r=((x-e.rx)/(.93*e.spread))**2+((z-e.rz)/(.82*e.spread))**2;return .47*e.rh/e.spread*Math.sqrt(Math.max(0,1-r))}
+function sampleCell(e,x,z){let a=(Math.atan2(z-e.z,x-e.x)+TAU)%TAU,j=Math.round(a/TAU*angles)%angles;
+ return clamp(Math.round(Math.hypot(x-e.x,z-e.z)/e.radius[j]*rings),0,rings)*angles+j}
+function addRice(x=0,z=0){riceKick=1;if(!egg.total)startPour();egg.rice=true;egg.rx=clamp(x,-1.02,1.02);egg.rz=clamp(z,-.9,.9);egg.wave=1;selected='rice';sound('soft',.8)}
+function updateHeat(e,dt){
+ if(!e.total)return;
+ let follow=1-Math.exp(-dt*3.7);e.x=mix(e.x,e.tx,follow);e.z=mix(e.z,e.tz,follow);
+ for(let j=0;j<angles;j++){let a=j*TAU/angles,dx=cos(a),dz=sin(a);e.radius[j]=mix(e.radius[j],e.target[j],follow*(1-.67*e.set[rings*angles+j]));
+  for(let i=0;i<=rings;i++){let k=i*angles+j,u=i/rings,x=e.x+dx*e.radius[j]*u,z=e.z+dz*e.radius[j]*u;
+   let edge=u*u*u,ring=Math.exp(-((Math.hypot(x+.29-.52*heat,z-.22+.51*heat)-1.02)**2)*3.8),patch=.91+.15*cos(x*5+z*2+e.phase)*cos(z*4);
+   let local=(.28+heat*1.55)*(.39+.65*ring+.45*edge)*patch,thickness=.63+e.mass[k]*.7*(1-.49*edge);
+   let was=e.set[k];e.set[k]=clamp(was+dt*.053*local/thickness);
+   e.fluff[k]+=(e.set[k]-was)*(1-heat);
+   e.brown[k]=clamp(e.brown[k]+dt*.017*local*(.047+1.46*edge+.134*ring)*smooth(.49,.97,e.set[k])*(.18+heat*heat*1.52));
+  }
+ }
+ if(e.leak)e.leakFlow=mix(e.leakFlow,e.leak,1-Math.exp(-dt*1.3));
+}
+function beginLift(x,z){
+ let e=egg;if(!e.total){toolKick=1;return}
+ let a=Math.atan2(z-e.z,x-e.x),k=sampleCell(e,x,z),edge=e.brown[k],soft=1-e.set[k];
+ e.lift={a,depth:.28,progress:.22,x,z,soft,edge};e.hitX=x;e.hitZ=z;e.wave=1;selected='turner';toolKick=1;sound(edge>.39?'crack':'soft',.55+.43*Math.max(edge,soft))
+}
+function fold(){
+ let e=egg,l=e.lift;if(!l)return;
+ let j=(Math.round((l.a+TAU)/TAU*angles))%angles,k=rings*angles+j;
+ let crisp=e.brown[k]>.36,soft=1-e.set[Math.floor(rings*.44)*angles+j];
+ let f={a:l.a,depth:clamp(.24+l.depth*.61),bend:1.45+l.depth*1.49,crisp,progress:.17};
+ let old=e.folds.find(p=>cos(p.a-f.a)>.89);
+ if(old)Object.assign(old,f);else if(e.folds.length<8)e.folds.push(f);
+ if(crisp){e.crisps++;sound('crack',.85)}
+ if(e.brown[k]<.22&&soft>.27){e.leak=Math.max(e.leak,soft*(.60+.35*l.depth));e.leakDir=l.a+.45}
+ e.lift=null;e.wave=1;sound('soft',.66)
+}
+function deform(e,i,j,t){
+ let u=i/rings,a=j*TAU/angles,k=i*angles+j,r=e.radius[j]*u,soft=1-e.set[k],brown=e.brown[k];
+ let petal=e.plated?(1-Math.min(1,e.folds.length*.19))*.092*u*u*cos(5*a+e.phase):0;
+ let x=e.x+(r+petal)*cos(a),z=e.z+(r+petal)*sin(a);
+ let y=.021+(.035+.074*e.thick[k]+.087*e.fluff[k])*(1-.72*u*u)+.025*sin(x*8+e.phase)*cos(z*7)*e.set[k];
+ let load=grainHeight(e,x,z),w=(.014+.088*soft+.064*e.fluff[k]+.024*e.thick[k])*e.wave;
+ y+=w*sin((9+4*brown)*t-4*Math.hypot(x-e.hitX,z-e.hitZ)-2.8*load)*(1-.68*brown)/(1+load*2);
+ if(e.rice&&e.plated){let sway=w*.43*sin(t*8.1-3*load);x+=sway*e.rx;z+=sway*e.rz}
+ y+=brown*.055*(.6+.4*cos(a*31))*u**4;
+ const bend=(f,A)=>{
+  let nx=cos(f.a),nz=sin(f.a),ridge=e.rice?(e.rx*nx+e.rz*nz)*.60:0;
+  let hinge=.84-f.depth*.60+ridge-.16*e.fluff[k],q=(x-e.x)*nx+(z-e.z)*nz-hinge;
+  if(q<=0)return;let alpha=A*smooth(0,.30,q);
+  x-=nx*q*(1-cos(alpha));z-=nz*q*(1-cos(alpha));
+  y+=q*sin(alpha)+smooth(0,.44,q)*grainHeight(e,x,z)*1.12;
+ };
+ for(let f of e.folds)bend(f,f.bend*f.progress);
+ if(e.lift)bend(e.lift,e.lift.progress*(.7+e.lift.depth*1.32));
+ if(e.plated)y+=.035*cos(5*a+e.phase)*u*u;
+ return [x,y,z]
+}
+const raw=col('df9f37'),cooked=col('ffe482'),toast=col('a95f27'),cream=col('fff0ae');
+function buildEgg(e){
+ let g=new Geometry(),ps=[],cs=[];
+ for(let i=0;i<=rings;i++)for(let j=0;j<angles;j++){let k=i*angles+j,u=i/rings,p=deform(e,i,j,now),s=e.set[k],b=e.brown[k],a=j/angles*TAU;
+  let c=colorMix(raw,cooked,smooth(0,.74,s)),mottle=.5+.5*sin(p[0]*15+sin(p[2]*11))*cos(p[2]*13+e.phase);
+  c=colorMix(c,cream,(.18+.42*u*u)*smooth(.08,.67,s)*(.44+.56*mottle));
+  c=colorMix(c,toast,smooth(.04,.79,b+(.23*mottle+.12*sin(a*27))*b));
+  if(e.folds.some(f=>f.crisp&&cos(f.a-a)>.65)&&u>.74)c=colorMix(c,toast,.38*smooth(.55,.99,cos(a*39+u*12)));
+  if(!s&&u>.95)c=colorMix(c,steel,.16);ps.push(p);cs.push(c)
+ }
+ for(let i=0;i<=rings;i++)for(let j=0;j<angles;j++){let k=i*angles+j,l=ps[i*angles+(j+angles-1)%angles],r=ps[i*angles+(j+1)%angles],top=ps[Math.min(i+1,rings)*angles+j],bot=ps[Math.max(i-1,0)*angles+j];
+  let ax=r[0]-l[0],ay=r[1]-l[1],az=r[2]-l[2],bx=top[0]-bot[0],by=top[1]-bot[1],bz=top[2]-bot[2];
+  let n=norm(ay*bz-az*by,az*bx-ax*bz,ax*by-ay*bx);if(n[1]<0)n=n.map(v=>-v);if(!i)n=[0,1,0];
+  g.vertex(ps[k],n,cs[k],11+.4*clamp(e.set[k]*1.29+.21*e.mass[k]));
+  let step=quality<.78?2:1;if(i>=step&&i%step===0&&j%step===0){let next=i*angles+(j+step)%angles,prev=angles*step;g.i.push(k-prev,next-prev,next,k-prev,next,k)}
+ }
+ for(let f of e.folds)if(f.crisp){let seam=[];for(let n=-11;n<=11;n++){let j=(Math.round(f.a/TAU*angles)+n+angles*2)%angles,p=ps[rings*angles+j];seam.push([p[0],p[1]+.015,p[2]])}
+  g.tube(seam,t=>.010+.012*sin(t*Math.PI),col('a4592d'),7,6)}
+ if(e.leakFlow>.005){let a=e.leakDir,x=e.x+cos(a)*1.04,z=e.z+sin(a)*1.04,s=e.leakFlow;
+  g.sphere(x,.044,z,.34+.46*s,.052+.013*sin(now*8)*e.wave,.22+.18*s,col('f2b22d'),6,a,34,10)}
+ e.shape=ps;e.mesh=upload(g,e.mesh);e.lastMesh=now
+}
+function foodHeight(e,x,z){let max=grainHeight(e,x,z),ps=e.shape;
+ for(let i=angles;i<ps.length;i+=2){let p=ps[i];if(abs(p[0]-x)<.14&&abs(p[2]-z)<.14)max=Math.max(max,p[1])}return max}
+function motif(mark,t){
+ let a=t*TAU;
+ if(mark==='circle')return [cos(a)*.79,sin(a)*.79];
+ if(mark==='wave')return [(t-.5)*2,.42*sin(t*TAU*1.5)];
+ return [sin(a)**3,-(13*cos(a)-5*cos(2*a)-2*cos(3*a)-cos(4*a))/17]
+}
+const marks=['circle','wave','heart'];
+function normalized(points){
+ let xs=points.map(p=>p[0]),zs=points.map(p=>p[1]),x0=Math.min(...xs),x1=Math.max(...xs),z0=Math.min(...zs),z1=Math.max(...zs),s=Math.max(.001,x1-x0,z1-z0);
+ return points.map(p=>[(p[0]-(x0+x1)/2)/s,(p[1]-(z0+z1)/2)/s])
+}
+const templates=marks.map(m=>normalized(Array.from({length:61},(_,i)=>motif(m,i/60))));
+function recognize(points){
+ let p=normalized(points);if(p.length<5)return 'circle';
+ const dist=(a,b)=>a.reduce((sum,v)=>sum+Math.min(...b.map(w=>(v[0]-w[0])**2+(v[1]-w[1])**2)),0)/a.length;
+ let scores=templates.map(t=>dist(t,p)+dist(p,t));return marks[scores.indexOf(Math.min(...scores))]
+}
+function sauceMesh(e){
+ let g=new Geometry();for(let s of e.strokes){if(!s.length)continue;
+  let path=s.map(p=>[p[0],p[2]+.052,p[1]]);
+  let red=col('c43117'),gold=col('ee9c37');
+  for(let j=1;j<path.length;j++){let a=path[j-1],b=path[j],p=s[j],k=sampleCell(e,p[0],p[1]),crisp=e.brown[k],mixing=sauceMix(e,p[0],p[1]);
+   let c=colorMix(red,gold,mixing*.75),rad=(.051+.013*mixing)*(1-.48*crisp);
+   g.tube([a,b],rad,c,6,8);if(j%2===0||j===1||j===path.length-1)g.sphere(...b,rad,rad,rad,c,6,0,8,4)
+  }
+ }e.sauce=upload(g,e.sauce)
+}
+function sauceMix(e,x,z){let a=e.leakDir,dist=Math.hypot(x-e.x-cos(a)*1.04,z-e.z-sin(a)*1.04);return e.leakFlow*(1-smooth(.10,.80,dist))}
+function addLine(e,x,z){
+ let s=e.strokes[e.strokes.length-1],last=s[s.length-1];
+ if(last&&Math.hypot(x-last[0],z-last[1])<.038)return;
+ if(s.length>=250)return;
+ let n=last?Math.min(16,Math.max(1,Math.ceil(Math.hypot(x-last[0],z-last[1])/.09))):1;
+ for(let j=1;j<=n;j++){let xx=last?mix(last[0],x,j/n):x,zz=last?mix(last[1],z,j/n):z;s.push([xx,zz,foodHeight(e,xx,zz)])}
+ e.sauceDirty=true
+}
+function finishLine(e,stamp=null){
+ let s=e.strokes[e.strokes.length-1];
+ if(stamp||s.length<5){let m=stamp||marks[(family.findIndex(f=>f.target===null)+3)%3];s.length=0;for(let j=0;j<=52;j++){let p=motif(m,j/52);addLine(e,p[0]*.93,p[1]*.88)}}
+ e.mark=recognize(s);e.signTime=now;e.wave=.7;sauceMesh(e);e.sauceDirty=false;sound('sauce',.64);familyEvent()
+}
+const sleeveColors=['688da7','ae735e','8c9b73'].map(col);
+function sleeveSection(g,z0,z1,r0,r1,c){
+ g.grid(15,32,(t,u)=>{let a=u*TAU,z=mix(z0,z1,t),r=mix(r0,r1,t),pleat=1+.039*cos(a*9+z*3)+.022*cos(z*12+a*3);
+  return [[cos(a)*r*pleat,.205+sin(a)*r*.62*pleat,z],norm(cos(a),sin(a)*1.5,.038*cos(12*z))]},c,4)
+}
+function handAsset(index,demo=false){
+ return mesh(g=>{
+  let skin=['e1b290','c99171','e5baa0'].map(col)[index],nail=colorMix(skin,col('f3d5c1'),.5),sleeve=sleeveColors[index];
+  g.sphere(0,.19,-1.26,.25,.18,.80,skin,7,0,26,12);
+  g.sphere(-.01,.184,-.48,.32,.155,.49,skin,7,.02,30,16);
+  let lengths=[.46,.54,.50,.36];
+  for(let j=0;j<4;j++){let x=(j-1.5)*.143,z=-.20+(j===3?-.05:0),len=lengths[j]*(demo&&j>0?.63:1),angle=(j-1.55)*.053;
+   g.sphere(x,.151,z+len*.39,.083,.077,len*.70,skin,7,angle,20,10);
+   g.sphere(x-sin(angle)*len*.77,.193,z+len*.94,.049,.023,.076,nail,3,angle,12,6)
+  }
+  g.sphere(-.296,.154,-.38,.108,.09,.27,skin,7,.66,20,12);
+  sleeveSection(g,-2.61,-.96,.405,.33,sleeve);
+  sleeveSection(g,-1.15,-.86,.343,.312,colorMix(sleeve,white,.16));
+  for(let j=0;j<35;j++){let a=j/35*TAU;g.tube([[cos(a)*.345,.205+sin(a)*.214,-1.14],[cos(a)*.314,.205+sin(a)*.196,-.866]],.006,sleeve,10,4)}
+  let p=[];for(let i=0;i<=36;i++){let [x,z]=motif(marks[index],i/36);p.push([x*.17,.205+.22*Math.sqrt(1-(x*.48)**2)+.009,-1.39+z*.17])}g.tube(p,.021,col('f2e6c8'),10,6);
+ })
+}
+const hands=marks.map((_,i)=>handAsset(i)),demoHand=handAsset(0,true);
+const sleeves=sleeveColors.map(c=>mesh(g=>sleeveSection(g,-1,0,.44,.407,c)));
+let shuffled=[0,1,2];for(let i=2;i>0;i--){let j=Math.floor(playRand()*(i+1));[shuffled[i],shuffled[j]]=[shuffled[j],shuffled[i]]}
+family=shuffled.map((id,i)=>({id,slot:i,target:null,lastMark:null,arrive:0,wait:0,x:0,z:0,init:false,choices:[],hesitate:false,nextBeat:0,reach:0,inspect:0}));
+function familyEvent(){
+ let duplicates=marks.map(m=>seats.filter(e=>e?.mark===m).length);
+ for(let f of family){
+  let m=marks[f.id],matches=seats.filter(e=>e?.mark===m);
+  let duplicate=duplicates.indexOf(Math.max(...duplicates)),doubled=duplicates[duplicate]>1;
+  f.hesitate=doubled&&(f.id===duplicate||!matches.length);let pool=f.hesitate?seats.filter(e=>e?.mark===marks[duplicate]):matches;
+  if(pool.length){let k=f.hesitate?(f.slot+Math.floor(now*1.12))%pool.length:0;f.target=pool[k];f.wait=now+(f.lastMark===f.target.mark?.13:.43)+.13*f.slot;f.nextBeat=now+1.05+f.slot*.27}
+  else{f.target=null;f.wait=now+.6}
+ }
+}
+function seatXY(i){let p=layout.seats[i],e=seats[i];if(e?.drag)return e.drag;
+  let drift=e?.nudge;if(!drift)return p;let t=now-drift.t,s=t<1.9?.13*sin(t*Math.PI/1.9):0;return {x:p.x+s*drift.dir,z:p.z+s*.35}}
+
+function evidenceAim(f){
+ if(!f.target)return null;let idx=seats.indexOf(f.target);return idx>=0?seatXY(idx):null
+}
+function advanceFamily(dt){
+ for(let f of family){let home=layout.homes[f.slot],pos=evidenceAim(f),reach=0,aim=home;
+  if(f.hesitate&&pos&&now>f.nextBeat){let alt=seats.filter(e=>e&&e.mark===f.target.mark&&e!==f.target);
+   if(alt.length){let prior=f.target;f.target=alt[0];if(!prior.drag)prior.nudge={t:now,dir:f.slot===1?1:-1}}f.nextBeat=now+1.5+f.slot*.32;f.wait=now+.33;pos=evidenceAim(f)}
+  if(pos&&now>f.wait){reach=f.hesitate?.45+.20*sin(now*2.8+f.slot*2):.84;
+   let e=f.target;
+   if(!f.hesitate&&f.arrive===e.signTime){let rest=smooth(.68,1.85,now-f.inspect);reach=mix(reach,.16,rest)}
+   if(!f.hesitate&&f.arrive!==e.signTime&&Math.hypot(f.x-pos.x,f.z-pos.z)<2.3){
+    f.arrive=e.signTime;f.lastMark=e.mark;f.choices.push(e.serial);chosen.push({family:f.id,dish:e.serial,mark:e.mark});e.wave=.65;f.inspect=now;
+    if(e.rare&&e.rice&&!e.peek){e.peek=true;e.rx=clamp(e.rx+(e.rx<0?-.3:.3),-1.15,1.15);e.strokes.push([]);for(let j=0;j<12;j++)addLine(e,e.rx+.45+j*.026,e.rz+.3+.08*sin(j*.5));e.sauceDirty=true}
+    sound('fork',.4)
+   }
+   let anchor=layout.anchors[f.slot],ax=anchor.x-pos.x,az=anchor.z-pos.z,al=Math.hypot(ax,az)||1;
+   aim={x:pos.x+.73*ax/al,z:pos.z+.73*az/al};if(seats.every(e=>e?.total&&e.mark)&&!f.hesitate&&now>f.nextBeat){f.inspect=now;e.wave=.48;f.nextBeat=now+2.6+f.slot*.49;sound('fork',.24)}
+  }else if(now-lastTouch>10){reach=.19*(.5+.5*cos((now+f.slot)*.71))**8;aim=layout.seats[(f.slot+1)%3]}
+  let t=1-Math.exp(-dt*(f.hesitate?3:4.8));if(!f.init){f.x=home.x;f.z=home.z;f.init=true}
+  f.x=mix(f.x,mix(home.x,aim.x,reach),t);f.z=mix(f.z,mix(home.z,aim.z,reach),t);f.reach=reach
+ }
+}
+function sendDish(){
+ if(!egg.total||serveFlight||mode!=='cook')return;
+ if(egg.lift)fold();pour=null;
+ let idx=seats.findIndex(e=>!e?.total);if(idx<0)idx=nextDish%3;servingSeat=idx;
+ egg.serial=++serial;egg.plated=true;egg.settle=1;egg.wave=1;selected='';dishes.push(egg);
+ let place=seats[idx];
+ if(place&&!place.total&&place.mark){
+  buildEgg(egg);egg.mark=place.mark;egg.signTime=now;
+  egg.strokes=place.strokes.map(line=>line.map(([x,z])=>[x,z,foodHeight(egg,x,z)]));egg.sauceDirty=true
+ }
+ if(place&&!place.total)dispose(place.sauce);
+ seats[idx]=egg;
+ for(let i=0;i<3;i++)if(!seats[i]){let clean=newEgg(true);clean.plated=true;clean.serial=-i-1;seats[i]=clean}
+ nextDish=idx+1;serveFlight={dish:egg,t:0};mode='table';tableWanted=true;plateKick=1;
+ sound('china',.77);familyEvent()
+}
+function toKitchen(){
+ if(mode==='cook'||serveFlight)return;
+ if(egg.plated)egg=newEgg(true);
+ mode='cook';tableWanted=false;selected='';pour=null;lastTouch=now;particles.length=0;sound('wood',.55)
+}
+function revisit(){if(!dishes.length||serveFlight)return;mode='table';tableWanted=true;selected='';familyEvent();sound('china',.4)}
+const tableWood=mesh(g=>{
+ let colors=['c3a383','cbac8a','bfa181','c7aa8d','cdae8f'].map(col);
+ for(let j=-16;j<=16;j++)g.slab(0,-.23,j*1.91,84,.23,1.906,.016,colors[(j+17)%5],1,0,.009)
+});
+let wallMesh,wallAt=0;
+function makeWall(){
+ if(wallMesh)dispose(wallMesh);wallMesh=mesh(g=>{
+ g.slab(0,-.12,-.20,62,4,.26,.04,col('b4b0a0'),8);
+ for(let row=0;row<4;row++)for(let j=-12;j<=12;j++){
+  let c=colorMix(col('e9e7d7'),col('e0dbc8'),assetRand()*.65);
+  g.slab(j*2.54+(row%2)*1.27,row*.91,-.04,2.526,.894,.15,.041,c,8,0,.023)
+ }
+ g.slab(0,0,.085,62,.11,.17,.045,col('c4b598'),2,0,.032)
+ })
+}
+makeWall();
+const steamBead=mesh(g=>g.sphere(0,0,0,1,.56,1,col('f8e2a2'),6,0,10,5));
+const steamWisp=mesh(g=>{let p=[];for(let i=0;i<=14;i++)p.push([.065*sin(i/14*5),i/14*.65,0]);g.tube(p,t=>.002+.009*sin(t*Math.PI),col('d6c6a7'),13,5)});
+const stream=mesh(g=>g.sphere(0,0,0,1,1,1,col('f3bd4e'),6,0,14,8));
+function stretchLast(sx,sy,sz){let m=objects[objects.length-1].mat;for(let k=0;k<3;k++){m[k]*=sx;m[k+4]*=sy;m[k+8]*=sz}}
+function rod(m,a,b,r){
+ let dx=b[0]-a[0],dy=b[1]-a[1],dz=b[2]-a[2],len=Math.hypot(dx,dy,dz);
+ put(m,(a[0]+b[0])/2,(a[1]+b[1])/2,(a[2]+b[2])/2,Math.atan2(dz,dx),1,0,Math.atan2(dy,Math.hypot(dx,dz)));stretchLast(len*.51,r,r)
+}
+const safeEl=document.getElementById('insets');
+function resize(){
+ W=canvas.clientWidth||innerWidth;H=canvas.clientHeight||innerHeight;let safe=safeEl.getBoundingClientRect();
+ portrait=W/H<.89;unit=Math.min(safe.width/(portrait?6.65:14.70),safe.height/(portrait?14.1:10.1));
+ function place(px,py,y=0){return {x:(safe.left+safe.width*px-W/2)/unit,z:((safe.top+safe.height*py-H/2)/unit+y*front)/down}}
+ let spot=(l,p,y=0)=>place(...(portrait?p:l),y);
+ let stovePos=spot([.493,.543],[.50,.52],.74);
+ layout={stove:stovePos,bowl:spot([.172,.402],[.235,.235],.48),rice:spot([.823,.37],[.756,.236],.51),
+ plate:spot([.175,.783],[.238,.826],.10),tool:spot([.819,.701],[.765,.773],.10),
+ vine:spot([.042,.173],[.005,.110]),tom:spot([.935,.209],[.958,.089]),oil:spot([.112,.176],[.115,.103]),
+ eggs:spot([.286,.145],[.49,.12]),knob:{x:stovePos.x-1.66,z:stovePos.z+1.77}};
+ layout.pan={x:stovePos.x,z:stovePos.z-.18};tableOffset=W/unit*.89+2;
+ const tableSpot=(l,p)=>{let q=spot(l,p);return {x:tableOffset+q.x*1.16,z:q.z*1.16}};
+ layout.seats=[tableSpot([.245,.50],[.27,.36]),tableSpot([.51,.59],[.725,.54]),tableSpot([.775,.50],[.30,.70])];
+ layout.anchors=[tableSpot([.05,-.18],[-.29,.19]),tableSpot([.55,-.18],[1.31,.38]),tableSpot([1.02,-.18],[-.29,.57])];
+ layout.homes=layout.seats.map((p,i)=>{let a=layout.anchors[i],dx=a.x-p.x,dz=a.z-p.z,len=Math.hypot(dx,dz),r=portrait?1.54:2.35;
+  return {x:p.x+dx*r/len,z:p.z+dz*r/len}});
+ layout.bottle=tableSpot([.88,.76],[.79,.8]);layout.mini=tableSpot([.14,.80],[.23,.92]);layout.history=tableSpot([.48,.89],[.57,.91]);
+ wallAt=place(.5,portrait?.048:.086).z;
+ for(let e of seats)if(e)delete e.drag;for(let f of family)f.init=false;
+ pixelRatio=Math.min(devicePixelRatio||1,2,Math.max(1,1360/Math.max(W,H)))*quality;
+ canvas.width=Math.max(1,Math.round(W*pixelRatio));canvas.height=Math.max(1,Math.round(H*pixelRatio))
+}
+function screen(x,y,z){return {x:W/2+(x-cx)*unit/zoom,y:H/2+((z-cz)*down-y*front)*unit/zoom}}
+function ground(x,y,h){return {x:(x-W/2)*zoom/unit+cx,z:((y-H/2)*zoom/unit+h*front)/down+cz}}
+function panScale(){return egg.small?.86:1}
+function panLocal(p){let s=panScale();return {x:(p.x-layout.pan.x)/s,z:(p.z-layout.pan.z)/s}}
+function panPoint(x,z){let s=panScale();return {x:layout.pan.x+x*s,z:layout.pan.z+z*s}}
+function panYaw(){return portrait?.92:.54}
+function activeSeat(){let i=seats.findIndex(e=>e?.total&&!e.mark);if(i<0)i=seats.findIndex(e=>e&&!e.mark);return i>=0?i:Math.max(0,seats.findIndex(Boolean))}
+function focal(){
+ if(mode==='table')return selected==='bottle'?'dish':seats.some(e=>e&&!e.mark)?'bottle':'mini';
+ if(!egg.total)return 'bowl';if(!heatTouched&&!egg.rice)return 'knob';if(!egg.rice)return 'rice';if(!egg.folds.length)return 'turner';return 'plate'
+}
+function shine(id){return id===pulseTarget?.47+.42*cos(now*2.9):0}
+function kicks(dt){let k=Math.exp(-dt*4.5);bowlKick*=k;riceKick*=k;toolKick*=k;knobKick*=k;plateKick*=k;bottleKick*=k;sceneNudge*=Math.exp(-dt*6);panTilt=mix(panTilt,tiltGoal,1-Math.exp(-dt*12));panSwing*=k}
+function food(e,x,y,z,s,tilt=0,side=0){
+ if(!e)return;
+ if(!e.total){if(e.sauceDirty){sauceMesh(e);e.sauceDirty=false}if(e.sauce)put(e.sauce,x,y,z,0,s,tilt,side);return}
+ if(!e.mesh||e.lastMesh<0||((!e.plated||e.wave>.04||e.leak-e.leakFlow>.01)&&now-e.lastMesh>(quality<.82?.084:.047)))buildEgg(e);
+ put(e.mesh,x,y,z,0,s,tilt,side);
+ if(e.rice){put(filling,x+e.rx*s,y+.024*s,z+e.rz*s,0,s,tilt,side);stretchLast(e.spread,e.rh/e.spread,e.spread)}
+ if(e.sauceDirty){sauceMesh(e);e.sauceDirty=false}if(e.sauce)put(e.sauce,x,y,z,0,s,tilt,side)
+}
+function propHop(id){return propTouch?.id===id?.14*Math.exp(-(now-propTouch.t)*5):0}
+function kitchen(){
+ let l=layout,p=l.pan,s=panScale(),hot=heat*.8+.15;
+ put(napkin,l.bowl.x,.001,l.bowl.z,-.18,portrait?.79:1);
+ put(teaTowel,l.tool.x,.008,l.tool.z+.55,.32,portrait?.81:1);
+ put(stove,l.stove.x,0,l.stove.z,0,1);
+ put(knobBase,l.knob.x,.75,l.knob.z,0,.93);
+ put(knob,l.knob.x,.757+knobKick*.027,l.knob.z,-1.57+3.75*heat,.93,0,knobKick*.035,shine('knob'));
+ put(burnerGlow,p.x,.985,p.z,0,1);stretchLast(1,hot+.2,1);
+ let px=p.x+.10*panTilt,pz=p.z,py=panY+.065*abs(panTilt);put(skillet,px,py,pz,panYaw(),s,panTilt*.095,panTilt*.09);
+ if(!egg.total)put(butter,px-.39,py+.135*s,pz+.21,-.36,.93);
+ else if(!egg.plated)food(egg,px,py+.145*s,pz,s,panTilt*.05,panTilt*.044);
+ let bowlH=portrait?.83:1,riceS=portrait?.83:1,bowlActive=held?.type==='bowl'&&held.moved;
+ let q=pour?panPoint(pour.x,pour.z):l.pan,carry=bowlActive?1:bowlTravel;
+ let b=bowlActive?held.world:{x:mix(l.bowl.x,q.x-.74,carry),z:mix(l.bowl.z,q.z-.43,carry)},by=.084+1.96*carry,bt=.57*carry+bowlKick*.11;
+ let bob=.024*shine('bowl');put(bowl,b.x,by+bob,b.z,0,bowlH,bt,-bt*.72,shine('bowl'));
+ let frac=egg.plated?1:1-egg.total/egg.capacity,fluidY=.197+.57*Math.sqrt(frac);put(eggPool,b.x,by+bob+fluidY*bowlH,b.z+bt*.52,0,bowlH*(.43+.58*Math.sqrt(frac)),bt*.83,-bt*.55);
+ if(pour&&egg.total<egg.capacity-.002){
+  let goal=panPoint(pour.x,pour.z),a=[goal.x-.19,eggY+.64,goal.z-.15],b=[goal.x,eggY+.047,goal.z];
+  if(carry>.62)a=[bowlActive?held.world.x+.38:mix(l.bowl.x,goal.x-.74,carry)+.72,by+.44,bowlActive?held.world.z+.11:mix(l.bowl.z,goal.z-.43,carry)+.43];rod(stream,a,b,.052+.016*sin(now*17))
+ }
+ put(riceBowl,l.rice.x,.035+riceKick*.064,l.rice.z,0,riceS,riceKick*.07,0,shine('rice'));
+ put(riceHeap,l.rice.x,.716*riceS+riceKick*.064,l.rice.z,0,riceS*(egg.rice?.86:1),0,0,shine('rice'));stretchLast(1,egg.rice?.72:1,1);
+ put(plate,l.plate.x,.035+plateKick*.075,l.plate.z,0,portrait?.81:1.03,0,plateKick*.04,shine('plate'));
+ if(dishes.length&&!serveFlight)food(dishes[dishes.length-1],l.plate.x,.18,l.plate.z,portrait?.53:.67);
+ if(held?.type==='turner'&&held.moved||egg.lift){
+  let v=held?.world||panPoint(egg.hitX,egg.hitZ);put(turner,v.x,eggY+.08,v.z,.33,portrait?.83:1,-.18,-.08)
+ }else put(turner,l.tool.x,.11+toolKick*.1,l.tool.z,-.36,portrait?.77:1.02,.065+toolKick*.10,0,shine('turner'));
+ put(vine,l.vine.x,.04+propHop('vine'),l.vine.z,-.36,portrait?.76:1.25);
+ put(cruet,l.oil.x,.025+propHop('oil'),l.oil.z,.33,portrait?.68:1.05);
+ put(breakfastEggs,l.eggs.x,.01+propHop('eggs'),l.eggs.z,-.11,portrait?.70:.94);
+ put(tomatoes,l.tom.x,.01+propHop('tom'),l.tom.z,-.17,portrait?.73:1.21);
+ for(let a of particles){if(egg.plated)break;let pt=panPoint(a.x,a.z),u=a.t/a.life;
+  if(a.kind==='vapor')put(steamWisp,pt.x+.08*sin(u*3),eggY+.15+u*.8,pt.z,0,.72*sin(Math.PI*u));
+  else put(steamBead,pt.x,eggY+.085+.04*sin(u*Math.PI),pt.z,0,a.r*(.35+.65*sin(u*Math.PI)))
+ }
+}
+function dishScale(){return portrait?.91:1.13}
+function forkPose(i){
+ let f=family[i],s=dishScale(),seat=seatXY(i),side=portrait&&i!==1?1:-1;
+ let x=seat.x+side*1.72*s,z=seat.z+.12,y=.13,yaw=side*.14;
+ let beat=f.inspect>0?1-smooth(.15,.95,now-f.inspect):0,aim=evidenceAim(f);
+ if(aim&&f.reach>.05){
+  let lift=.16*f.reach+.83*beat,dx=aim.x-f.x,dz=aim.z-f.z,d=Math.hypot(dx,dz)||1;
+  x=mix(x,f.x+dx/d*.38,lift);z=mix(z,f.z+dz/d*.38,lift);
+  yaw=mix(yaw,Math.atan2(dx,-dz),lift);y+=lift*(.38+.09*sin(beat*Math.PI))
+ }else y+=.09*beat;
+ return {x,y,z,yaw}
+}
+function table(){
+ let l=layout,s=dishScale();
+ put(vine,tableOffset+W/unit*.39,.04,wallAt+1.4,.4,1.4);
+ put(tomatoes,tableOffset-W/unit*.37,.022,wallAt+1.1,-.4,1.05);
+ for(let i=0;i<3;i++){
+  let p=seatXY(i),e=seats[i],bounce=e?e.settle*.085*sin(e.settle*14):(emptyTap?.index===i?.075*Math.exp(-6*(now-emptyTap.time)):0);
+  put(napkin,l.seats[i].x,.008+i*.008,l.seats[i].z,-.07+i*.074,s*1.07);
+  put(plate,p.x,.094+bounce,p.z,0,s,0,bounce*.27,shine('dish')&&i===activeSeat()?shine('dish'):0);
+  if(e&&e!==serveFlight?.dish)food(e,p.x,.094+s*.124+bounce,p.z,s*.78,0,bounce*.2);
+  let utensil=forkPose(i);put(fork,utensil.x,utensil.y,utensil.z,utensil.yaw,s*.91);
+ }
+ for(let f of family){
+  let bounce=f.inspect?Math.max(0,.45-(now-f.inspect)):0,anchor=l.anchors[f.slot],dx=f.x-anchor.x,dz=f.z-anchor.z,len=Math.hypot(dx,dz)||1,yaw=Math.atan2(-dx,dz),size=s*1.04,y=.17+.10*f.reach+bounce*.2;
+  let arm=2.58*size;put(sleeves[f.id],f.x-dx/len*arm,y,f.z-dz/len*arm,yaw,size);stretchLast(1,1,Math.max(.14,len/size-2.30));
+  put(hands[f.id],f.x,y,f.z,yaw,size);
+ }
+ let b=held?.type==='bottle'&&held.moved?held.world:l.bottle;put(bottle,b.x,b===l.bottle?.025:1.56,b.z,0,portrait?.84:1.04,bottleKick*.13,b===l.bottle?-.09:-.95,shine('bottle'));
+ put(skillet,l.mini.x,.05,l.mini.z,portrait?.2:.30,portrait?.42:.53,.02,0,shine('mini'));
+ put(butter,l.mini.x-.09,.137,l.mini.z,0,.73);
+ let old=dishes.filter(e=>!seats.includes(e));
+ for(let j=0;j<Math.min(4,old.length);j++){let p=archivePosition(j),e=old[old.length-1-j];put(plate,p.x,.04+j*.008,p.z,0,.41);food(e,p.x,.097+j*.008,p.z,.31)}
+ if(serveFlight){
+  let e=serveFlight.dish,t=smooth(0,1,serveFlight.t/1.12),p=l.pan,q=l.seats[servingSeat];
+  food(e,mix(p.x,q.x,t),mix(eggY,.094+s*.124,t)+.52*sin(Math.PI*t),mix(p.z,q.z,t),mix(panScale(),s*.78,t),.12*sin(t*TAU))
+ }
+}
+function archivePosition(j){return {x:layout.history.x+(j-1)*.71,z:layout.history.z+.14*(j%2)}}
+function cue(){
+ let idle=now-lastTouch;if(idle<4||held||serveFlight)return;
+ let t=(idle-4)%12;if(t>2.85)return;
+ let l=layout,id=focal(),p=l[id==='turner'?'tool':id==='dish'?'seats':id];if(id==='dish')p=l.seats[activeSeat()];if(!p)return;
+ let weight=smooth(0,.55,t)*(1-smooth(2.20,2.85,t)),travel=smooth(.85,1.94,t),goal=mode==='cook'?l.pan:id==='bottle'?l.seats[Math.max(0,seats.findIndex(Boolean))]:p;
+ let x=mix(p.x,goal.x,travel*.44)+.29,z=mix(p.z,goal.z,travel*.44)+1.14;
+ if(id==='knob'){x=p.x+.38*cos(travel*2.3);z=p.z+.38*sin(travel*2.3)+.28}
+ let yy=.5+weight*.23+(1-weight)*.4,zz=z+(1-weight)*1.5,ss=.68*weight,angle=Math.PI-.32;
+ put(sleeves[0],x+sin(angle)*2.57*ss,yy,zz-cos(angle)*2.57*ss,angle,ss);stretchLast(1,1,18);
+ put(demoHand,x,yy,zz,angle,ss)
+}
+let lastShadow=-5,frameCount=0;
+function render(){
+ pulseTarget=focal();cx=tableOffset*transition;cz=0;zoom=1+.16*transition;
+ objects.length=0;put(tableWood,0,0,0,0,1,0,0,0,false);put(wallMesh,0,0,wallAt-transition*H/unit*.84,0,1,0,0,0,false);
+ if(transition<.96)kitchen();if(transition>.04||serveFlight)table();cue();
+ gl.activeTexture(gl.TEXTURE0);gl.bindTexture(gl.TEXTURE_2D,grainTex);gl.activeTexture(gl.TEXTURE1);
+ if(now-lastShadow>.117||held||serveFlight||lastShadow<0){gl.bindTexture(gl.TEXTURE_2D,null);
+  gl.bindFramebuffer(gl.FRAMEBUFFER,shadows);gl.viewport(0,0,shadowSize,shadowSize);gl.clearColor(0,0,0,1);gl.clear(gl.DEPTH_BUFFER_BIT|gl.COLOR_BUFFER_BIT);drawObjects(true);lastShadow=now}
+ gl.bindFramebuffer(gl.FRAMEBUFFER,null);gl.bindTexture(gl.TEXTURE_2D,shadeTex);gl.viewport(0,0,canvas.width,canvas.height);
+ gl.clearColor(.89,.875,.81,1);gl.clear(gl.COLOR_BUFFER_BIT|gl.DEPTH_BUFFER_BIT);
+ let l=layout,spots=mode==='cook'?[[l.stove,3.8,3.5],[l.bowl,1.54,1.40],[l.rice,1.45,1.28],[l.plate,1.67,1.7],[l.tool,.71,1.5],[l.oil,.56,.52],[l.eggs,1.1,.7],[l.tom,.94,.72]]:[...l.seats.map(q=>[q,1.79,1.69]),[l.mini,1.37,1.1],[l.bottle,.6,.55]];
+ for(let i=0;i<8;i++){let [q,rx,rz]=spots[i]||[{x:200,z:200},1,1];gl.uniform4f(contactLocations[i],q.x,q.z,rx,rz)}
+ gl.uniform4f(U.view,cx+sceneNudge*.045*cos(now*18),cz,2*unit/(zoom*W),2*unit/(zoom*H));gl.uniform2f(U.lens,down,front);gl.uniform1f(U.time,now);gl.uniform1f(U.quality,quality);gl.uniform1f(U.breakfast,mode==='table'&&seats.every(e=>e?.total&&e.mark)?smooth(0,6,now-Math.max(...seats.map(e=>e.signTime))):0);drawObjects(false);frameCount++
+}
+function tick(dt){
+ now+=dt;kicks(dt);bowlTravel=mix(bowlTravel,pour?1:0,1-Math.exp(-dt*(pour?12:7)));
+ if(mode==='cook'){
+  if(pour){if(held?.type==='bowl'&&held.moved)pour.left=.17;let dose=Math.min(dt*pour.rate,Math.max(0,pour.left)*pour.rate);
+   if(dose>0)deposit(egg,pour.x,pour.z,dose);pour.left-=dt;if(pour.left<=0||egg.total>=egg.capacity-.001)pour=null}
+  if(!egg.plated)updateHeat(egg,dt);
+  if(egg.total&&playRand()<dt*(1+heat*6)){let a=playRand()*TAU,r=playRand()*egg.radius[Math.floor(a/TAU*angles)];puff(egg.x+cos(a)*r,egg.z+sin(a)*r,1)}
+  if(now-lastTouch>10&&playRand()<dt*.7)puff(-.36,.2,1,'vapor')
+ }
+ let live=seats.filter(Boolean);if(!live.includes(egg))live.push(egg);for(let e of live){e.wave*=Math.exp(-dt*(1.1+e.crisps*.17));e.settle*=Math.exp(-dt*2.6);if(e.plated)e.leakFlow=mix(e.leakFlow,e.leak,1-Math.exp(-dt*1.8));
+  for(let f of e.folds)f.progress=mix(f.progress,1,1-Math.exp(-dt*6));
+  if(e.lift)e.lift.progress=mix(e.lift.progress,1,1-Math.exp(-dt*4))
+ }
+ for(let j=particles.length-1;j>=0;j--)if((particles[j].t+=dt)>particles[j].life)particles.splice(j,1);
+ if(serveFlight){serveFlight.t+=dt;if(serveFlight.t>1.12){serveFlight.dish.settle=1;sound('china',.57);serveFlight=null}}
+ let dir=tableWanted?1:-1;travelPhase=clamp(travelPhase+dt*dir/1.18);transition=smooth(0,1,travelPhase);
+ if(mode==='table')advanceFamily(dt);
+ let a=audioState;if(a.ctx?.state==='running'&&now-a.last>.13){let level=mode==='cook'&&egg.total&&!egg.plated?.011*heat*(1-.68*egg.set[0])+(pour?.015:0):.00001;
+ a.sizzle.gain.setTargetAtTime(Math.max(.00001,level),a.ctx.currentTime,.10);a.filter.frequency.setTargetAtTime(1550+heat*2400,a.ctx.currentTime,.14);a.last=now}
+}
+let travelPhase=0,bowlTravel=0;
+function target(x,y){
+ let hits=[];
+ function hit(type,p,h,rx,rz,extra=null,priority=0){
+  let s=screen(p.x,h,p.z),ax=Math.max(24,rx*unit/zoom),az=Math.max(24,rz*unit/zoom);
+  let dist=((x-s.x)/ax)**2+((y-s.y)/az)**2;if(dist<=1)hits.push({type,extra,score:dist+priority})
+ }
+ let l=layout;
+ if(mode==='cook'){
+  let ps=panScale(),bs=portrait?.83:1,yaw=panYaw();
+  hit('knob',l.knob,1.03,.59,.50,null,-.6);hit('bowl',l.bowl,.54*bs,1.32*bs,1.15*bs,null,-.20);hit('rice',l.rice,.55*bs,1.3*bs,1.14*bs,null,-.19);
+  hit('plate',l.plate,.17,portrait?1.36:1.64,portrait?1.21:1.41);
+  for(let d of [2.27,2.88,3.52,4.05]){let p=panPoint(d*cos(yaw),d*sin(yaw));hit('handle',p,panY+.6*ps,.47*ps,.45*ps,null,-.22)}
+  let ts=portrait?.77:1.02;for(let d of [-.39,.30,1.15,1.92,2.4])hit('turner',{x:l.tool.x+.352*d*ts,z:l.tool.z+.936*d*ts},.23,.53*ts,.54*ts,null,-.06);
+  hit('pan',l.pan,eggY,2.31*ps,1.94*ps);
+  for(let k of ['vine','tom','eggs','oil'])hit(k,l[k],k==='oil'?.57:.20,k==='oil'?.49:.98,k==='oil'?.8:.60)
+ }else{
+  let s=dishScale();hit('bottle',l.bottle,.79,.61,.94,null,-.2);hit('mini',l.mini,.22,portrait?1.2:1.5,portrait?.88:1.1);
+  for(let i=0;i<3;i++){hit('dish',seatXY(i),.19,1.61*s,1.42*s,i,-.11);let f=family[i];hit('hand',f,.35,.57*s,.64*s,i,.32);
+   let utensil=forkPose(i);hit('fork',utensil,utensil.y,.30,.76,i,.19)}
+  let old=dishes.filter(e=>!seats.includes(e));for(let j=0;j<Math.min(4,old.length);j++)hit('archive',archivePosition(j),.16,.64,.54,old[old.length-1-j],-.18)
+ }
+ hits.sort((a,b)=>a.score-b.score);return hits[0]||{type:'backdrop'}
+}
+function localDish(e,x,y){
+ let idx=seats.indexOf(e),p=seatXY(idx),s=dishScale()*.78,q=ground(x,y,.094+dishScale()*.124+.14*s);
+ let X=(q.x-p.x)/s,Z=(q.z-p.z)/s,r=Math.hypot(X,Z);if(r>1.76){X*=1.76/r;Z*=1.76/r}return [X,Z]
+}
+function drawAt(e,x,y,begin=false){if(!e)return;if(begin){e.strokes=[[]];e.mark=null;familyEvent()}let p=localDish(e,x,y);addLine(e,...p);e.wave=.44}
+function press(ev){
+ ev.preventDefault();unlock();if(held||serveFlight)return;
+ const x=ev.clientX,y=ev.clientY,t=target(x,y),world=ground(x,y,eggY);
+ held={id:ev.pointerId,type:t.type,extra:t.extra,x,y,startX:x,startY:y,world,moved:false,angle:0,initialHeat:heat,previous:selected};
+ try{canvas.setPointerCapture(ev.pointerId)}catch{}
+ lastTouch=lastAction=now;let p=panLocal(world),h=held;
+ switch(t.type){
+ case 'bowl':startPour(-.13,.06);break;
+ case 'knob':{heatTouched=true;let q=screen(layout.knob.x,1,layout.knob.z);h.angle=Math.atan2(y-q.y,x-q.x);heat=clamp(heat+(heat>.78?-.60:.18),.045,1);knobKick=1;sound('wood',.55);break}
+ case 'rice':addRice(egg.rx,egg.rz);break;
+ case 'turner':selected='turner';toolKick=1;if(egg.total){beginLift(.99,.73)}else sound('wood',.5);break;
+ case 'handle':h.foodOrigin=[egg.tx,egg.tz,egg.rx,egg.rz];panSwing=1;tiltGoal=.43;egg.wave=1;sound('wood',.66);break;
+ case 'pan':
+  if(selected==='turner'){beginLift(p.x,p.z);h.type='lift'}
+  else if(egg.rice&&Math.hypot(p.x-egg.rx,p.z-egg.rz)<.87){h.type='moveRice';h.riceX=egg.rx;h.riceZ=egg.rz;h.grip=[p.x-egg.rx,p.z-egg.rz];h.spread=egg.spread;riceKick=.65;egg.wave=1;sound('soft',.47)}
+  else if(selected==='rice'){addRice(p.x,p.z);h.type='moveRice';h.riceX=egg.rx;h.riceZ=egg.rz}
+  else{startPour(p.x,p.z);if(!pour){beginLift(p.x,p.z);h.type='lift'}}break;
+ case 'plate':plateKick=1;if(egg.total&&!egg.plated)sendDish();else if(dishes.length)revisit();else sound('china',.53);break;
+ case 'mini':toKitchen();break;
+ case 'bottle':selected='bottle';bottleKick=1;sound('sauce',.63);break;
+ case 'dish':{let e=seats[t.extra];h.dish=e;emptyTap={index:t.extra,time:now};plateKick=1;
+  if(!e){sound('china',.48);break}
+  let q=localDish(e,x,y);if((selected==='bottle'||!e.mark)&&Math.hypot(...q)<1.40){h.type='draw';drawAt(e,x,y,true);sound('sauce',.49)}
+  else{e.wave=1;e.settle=.72;sound('china',.48)}break}
+ case 'fork':{let f=family[t.extra];f.inspect=now;if(seats[t.extra])seats[t.extra].settle=.72;sound('fork',.64);break}
+ case 'hand':{let f=family[t.extra],e=seats[t.extra]||seats.find(Boolean);
+  if(e){e.strokes=[[]];finishLine(e,marks[f.id]);f.inspect=now}break}
+ case 'archive':{let e=t.extra,idx=nextDish%3;seats[idx]=e;nextDish=idx+1;e.wave=1;e.settle=1;sound('china',.62);familyEvent();break}
+ case 'backdrop':sceneNudge=.92;break;
+ default:propTouch={id:t.type,t:now};sound(t.type==='oil'?'china':'wood',.37)
+ }
+}
+let propTouch=null,emptyTap=null;
+function move(ev){
+ if(!held||ev.pointerId!==held.id)return;ev.preventDefault();let h=held,x=ev.clientX,y=ev.clientY,dx=(x-h.startX)/unit,dz=(y-h.startY)/unit/down;
+ h.x=x;h.y=y;h.moved||=Math.hypot(x-h.startX,y-h.startY)>5;lastTouch=now;
+ let world=ground(x,y,eggY),p=panLocal(world),inPan=Math.hypot(p.x,p.z)<2.26;
+ if(h.type==='knob'&&h.moved){
+  let q=screen(layout.knob.x,1,layout.knob.z),angle=Math.atan2(y-q.y,x-q.x),delta=angle-h.angle;
+  if(delta>Math.PI)delta-=TAU;if(delta< -Math.PI)delta+=TAU;
+  heat=clamp(heat+(abs(delta)>.014?delta/4.5:(x-(h.lastX??h.startX))/(unit*2)),.045,1);knobKick=.8;h.angle=angle;h.lastX=x
+ }else if(h.type==='bowl'||(h.type==='pan'&&selected==='bowl')){
+  if(inPan){if(!pour&&egg.total<egg.capacity-.002)startPour(p.x,p.z);if(pour){let distance=Math.hypot(p.x-pour.x,p.z-pour.z);
+    if(distance>.12)deposit(egg,mix(pour.x,p.x,.5),mix(pour.z,p.z,.5),Math.min(.026,distance*.021));
+    pour.x=clamp(p.x,-1.58,1.58);pour.z=clamp(p.z,-1.58,1.58);pour.left=.38}}
+ }else if((h.type==='rice'||h.type==='moveRice')&&inPan){
+  if(h.grip&&Math.hypot(...h.grip)>.43){
+   let distance=Math.hypot(...h.grip),press=((p.x-h.riceX)*h.grip[0]+(p.z-h.riceZ)*h.grip[1])/distance-distance;
+   egg.spread=clamp(h.spread+press*.48,.70,1.49);egg.rx=clamp(h.riceX+dx*.23,-1.06,1.06);egg.rz=clamp(h.riceZ+dz*.23,-.94,.94)
+  }else{egg.rx=clamp(p.x,-1.06,1.06);egg.rz=clamp(p.z,-.94,.94)}egg.wave=.72
+
+ }else if(h.type==='turner'||h.type==='lift'){
+  if(inPan&&(!h.entered||!egg.lift)){if(h.type==='turner'||!egg.lift)beginLift(p.x,p.z);h.entered=true}
+  if(inPan&&egg.lift){let l=egg.lift;l.depth=clamp(1.08-Math.hypot(p.x-egg.x,p.z-egg.z)*.38+.12*abs(dz),.14,1);l.progress=1;egg.wave=1;
+   if(egg.rice&&Math.hypot(p.x-egg.rx,p.z-egg.rz)<.50){egg.rx=clamp(egg.rx+(p.x-egg.rx)*.042,-1.06,1.06);egg.rz=clamp(egg.rz+(p.z-egg.rz)*.042,-.94,.94)}}
+ }else if(h.type==='handle'){
+  tiltGoal=clamp(dx+dz*.45,-1.3,1.3);let flow=.32-.14*egg.set[0];egg.tx=clamp(h.foodOrigin[0]+dx*flow,-.42,.42);egg.tz=clamp(h.foodOrigin[1]+dz*flow,-.42,.42);
+  if(egg.rice){egg.rx=clamp(h.foodOrigin[2]+dx*.26,-1.1,1.1);egg.rz=clamp(h.foodOrigin[3]+dz*.26,-.96,.96)}egg.wave=1
+ }else if(h.type==='draw'&&h.dish)drawAt(h.dish,x,y);
+ else if(h.type==='bottle'){let t=target(x,y),e=t.type==='dish'&&seats[t.extra];if(e){drawAt(e,x,y,h.dish!==e);h.dish=e}}
+ else if(h.type==='dish'&&h.dish&&h.moved){let p=layout.seats[h.extra];h.dish.drag={x:p.x+dx*zoom,z:p.z+dz*zoom};h.dish.wave=.7}
+ h.world=world
+}
+function release(ev,cancel=false){
+ let h=held;if(!h||ev.pointerId!==h.id)return;held=null;tiltGoal=0;lastTouch=now;
+ if(!cancel){
+  if((h.type==='lift'||h.type==='turner')&&egg.lift)fold();
+  if(h.type==='handle'&&egg.total&&(target(h.x,h.y).type==='plate'||(h.moved&&h.y-h.startY>unit*1.26)))sendDish();
+  if((h.type==='draw'||h.type==='bottle')&&h.dish){finishLine(h.dish);selected=''}
+  if(h.type==='dish'&&h.dish?.drag){let p=h.dish.drag,near=layout.seats.map(s=>Math.hypot(p.x-s.x,p.z-s.z));let i=near.indexOf(Math.min(...near));
+   [seats[h.extra],seats[i]]=[seats[i],seats[h.extra]];h.dish.settle=.87;sound('china',.53);familyEvent()}
+ }else{egg.lift=null;pour=null;if(h.dish?.strokes.length&&h.dish.strokes.at(-1).length>2&&!h.dish.mark)finishLine(h.dish)}
+ if(h.dish)delete h.dish.drag;
+ if(canvas.hasPointerCapture(ev.pointerId))canvas.releasePointerCapture(ev.pointerId)
+}
+canvas.addEventListener('pointerdown',press);canvas.addEventListener('pointermove',move);
+canvas.addEventListener('pointerup',e=>release(e));for(let event of ['pointercancel','lostpointercapture'])canvas.addEventListener(event,e=>release(e,true));
+for(let e of ['contextmenu','selectstart','dragstart','gesturestart','gesturechange','dblclick'])document.addEventListener(e,v=>v.preventDefault(),{passive:false});
+let raf=0,prev=0,slow=0,frames=0,resizing=false,contextLost=false;
+function loop(ts){
+ raf=0;if(document.hidden||contextLost)return;if(resizing){resize();lastShadow=-5;resizing=false}
+ let elapsed=prev?(ts-prev)/1000:1/60;prev=ts;
+ let dt=Math.min(.10,elapsed);tick(dt);render();
+ if(++frames>15){slow=elapsed>.038?slow+1:Math.max(0,slow-1);if(slow>27&&quality>.64){quality=Math.max(.63,quality-.14);resizeShadow(quality<.78?512:768);resizing=true;slow=0}}
+ raf=requestAnimationFrame(loop)
+}
+function pause(){if(held)release({pointerId:held.id},true);cancelAnimationFrame(raf);raf=0;prev=0;audioState.ctx?.suspend().catch(()=>{})}
+function wake(){if(!document.hidden&&!contextLost&&!raf){prev=0;resizing=true;raf=requestAnimationFrame(loop);if(audioState.ctx)audioState.ctx.resume().catch(()=>{})}}
+document.addEventListener('visibilitychange',()=>document.hidden?pause():wake());
+window.addEventListener('pagehide',pause);window.addEventListener('pageshow',wake);
+window.addEventListener('resize',()=>{if(held)release({pointerId:held.id},true);resizing=true});window.visualViewport?.addEventListener('resize',()=>{resizing=true});
+canvas.addEventListener('webglcontextlost',e=>{e.preventDefault();contextLost=true;pause()});
+canvas.addEventListener('webglcontextrestored',()=>{
+ initializeGraphics(shadowSize||1024);
+ for(let [m,build] of staticAssets){let g=new Geometry();build(g);Object.assign(m,upload(g))}
+ for(let e of new Set([...dishes,...seats.filter(Boolean),egg])){e.mesh=null;e.sauce=null;e.sauceDirty=e.strokes.length>0;e.lastMesh=-1}
+ contextLost=false;lastShadow=-5;wake()
+});
+resize();wake();
+</script></html>
