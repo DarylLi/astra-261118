@@ -1,0 +1,2617 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+  <meta name="theme-color" content="#30493c">
+  <title>ひらり、くたん！キャベツのおやまにしょうが焼き</title>
+  <style>
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      overscroll-behavior: none;
+      background: #485143;
+      touch-action: none;
+      -webkit-user-select: none;
+      user-select: none;
+      -webkit-touch-callout: none;
+    }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+    #inset {
+      position: fixed;
+      visibility: hidden;
+      padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom) env(safe-area-inset-left);
+    }
+  </style>
+</head>
+<body>
+<canvas aria-label="夕暮れの台所でつくるしょうが焼き"></canvas>
+<i id="inset"></i>
+<script>
+'use strict';
+
+const canvas = document.querySelector('canvas');
+const gl = canvas.getContext('webgl', {
+  alpha: false,
+  antialias: true,
+  preserveDrawingBuffer: false,
+  powerPreference: 'high-performance'
+});
+const PI = Math.PI,
+  TAU = 2 * PI,
+  sin = Math.sin,
+  cos = Math.cos,
+  clamp = (v, a, b) => Math.max(a, Math.min(b, v)),
+  mix = (a, b, t) => a + (b - a) * t;
+const add = (a, b) => a.map((v, i) => v + b[i]),
+  sub = (a, b) => a.map((v, i) => v - b[i]),
+  mul = (a, s) => a.map(v => v * s),
+  dot = (a, b) => a.reduce((s, v, i) => s + v * b[i], 0),
+  cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]],
+  unit = a => mul(a, 1 / (Math.hypot(...a) || 1)),
+  lerp = (a, b, t) => a.map((v, i) => mix(v, b[i], t));
+const identity = () => [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+function mm(a, b) {
+  let o = [];
+  for (let j = 0; j < 4; j++) for (let i = 0; i < 4; i++) o[j * 4 + i] = a[i] * b[j * 4] + a[4 + i] * b[j * 4 + 1] + a[8 + i] * b[j * 4 + 2] + a[12 + i] * b[j * 4 + 3];
+  return o;
+}
+function pose(x = 0, y = 0, z = 0, ry = 0, rx = 0, rz = 0, s = 1) {
+  let a = cos(ry),
+    b = sin(ry),
+    c = cos(rx),
+    d = sin(rx),
+    e = cos(rz),
+    f = sin(rz);
+  return [(a * e + b * d * f) * s, c * f * s, (-b * e + a * d * f) * s, 0, (-a * f + b * d * e) * s, c * e * s, (b * f + a * d * e) * s, 0, b * c * s, -d * s, a * c * s, 0, x, y, z, 1];
+}
+function transform(m, p, w = 1) {
+  return [m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12] * w, m[1] * p[0] + m[5] * p[1] + m[9] * p[2] + m[13] * w, m[2] * p[0] + m[6] * p[1] + m[10] * p[2] + m[14] * w];
+}
+function view(e, t) {
+  let z = unit(sub(e, t)),
+    x = unit(cross([0, 1, 0], z)),
+    y = cross(z, x);
+  return [x[0], y[0], z[0], 0, x[1], y[1], z[1], 0, x[2], y[2], z[2], 0, -dot(x, e), -dot(y, e), -dot(z, e), 1];
+}
+function perspective(f, a, n, d) {
+  let h = 1 / Math.tan(f / 2);
+  return [h / a, 0, 0, 0, 0, h, 0, 0, 0, 0, (d + n) / (n - d), -1, 0, 0, 2 * d * n / (n - d), 0];
+}
+function rgb(h) {
+  if (Array.isArray(h)) return h;
+  let v = parseInt(h.replace('#', ''), 16);
+  return [(v >> 16) / 255, (v >> 8 & 255) / 255, (v & 255) / 255];
+}
+let seed = 83146;
+function rnd() {
+  seed = 1664525 * seed + 1013904223 >>> 0;
+  return seed / 4294967296;
+}
+const mat = (c, k = 0, g = .15) => ({
+  c: rgb(c),
+  k,
+  g
+});
+// All material shading uses mesh-local coordinates; cut faces keep those coordinates when they fall.
+const vertex = `attribute vec3 p,n,col,tex;attribute vec2 surface;uniform mat4 model,vp,light;varying vec3 P,N,C,T;varying vec2 S;varying vec4 L;void main(){vec4 w=model*vec4(p,1.);P=w.xyz;N=mat3(model)*n;C=col;T=tex;S=surface;L=light*w;gl_Position=vp*w;}`;
+const fragment = `precision highp float;varying vec3 P,N,C,T;varying vec2 S;varying vec4 L;uniform sampler2D shadow;uniform vec3 eye;uniform vec3 anchors[5];uniform vec4 glint;uniform float opacity;uniform float browning;uniform float time;uniform vec2 resolution;
+float hash(vec3 p){p=fract(p*.1031);p+=dot(p,p.yzx+33.33);return fract((p.x+p.y)*p.z);}float noise(vec3 p){vec3 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);return mix(mix(mix(hash(i),hash(i+vec3(1,0,0)),f.x),mix(hash(i+vec3(0,1,0)),hash(i+vec3(1,1,0)),f.x),f.y),mix(mix(hash(i+vec3(0,0,1)),hash(i+vec3(1,0,1)),f.x),mix(hash(i+vec3(0,1,1)),hash(i+1.),f.x),f.y),f.z);}
+float shade(vec3 q,float bias){if(q.x<0.||q.x>1.||q.y<0.||q.y>1.||q.z>1.)return 1.;float s=0.;for(int x=-1;x<=1;x++)for(int y=-1;y<=1;y++){vec2 depth=texture2D(shadow,q.xy+vec2(float(x),float(y))*.00125).rg;s+=step(q.z-bias,depth.r+depth.g/255.);}return s/9.;}
+void main(){vec3 n=normalize(N),v=normalize(eye-P),ld=normalize(vec3(-.53,.91,-.45));if(dot(n,v)<0.)n=-n;vec3 c=C;float k=S.x,g=S.y;float grain=hash(floor(T*270.));float speck=noise(T*21.);
+if(k>.5&&k<1.5){float w=T.z*22.+T.y*13.+1.5*sin(T.x*1.7+T.z*4.)+2.5*noise(T*vec3(.7,3.,3.));float lines=pow(.5+.5*sin(w*5.),12.);c*=.96+.076*noise(T*vec3(1.,17.,17.))+.032*sin(w)-.062*lines+.019*grain;}
+else if(k>1.5&&k<2.5){c*=.965+.045*speck+.019*grain;if(grain>.997)c*=.94;}
+else if(k>2.5&&k<3.5){vec2 f=fract(T.xz*8.);c*=1.-.17*(step(.5,f.x)+step(.5,f.y));c*=.94+.06*grain;}
+else if(k>3.5&&k<4.5){float h=T.y-.28;float xx=(T.x+.055*sin(T.y*3.))*(1.+.29*max(h,0.));float r=length(vec2(xx,h*.87))+.13*T.z*T.z+.014*sin(T.x*5.+T.y*3.);float ph=r*59.+.54*sin(9.*r)+.32*sin(T.y*5.);float ring=pow(.5+.5*cos(ph),5.);float bright=pow(.5+.5*cos(ph-.80),5.);c=mix(c,vec3(.70,.70,.41),ring*.67);c+=.061*bright;c=mix(c,vec3(.91,.88,.61),.20*(1.-smoothstep(.06,.38,r)));c+=vec3(.043,.035,.012)*clamp((k-4.)*2.,0.,1.);float patch=smoothstep(.29,.74,noise(T*vec3(6.,8.,7.)));c=mix(c,vec3(.61,.34,.13),browning*(.19+.72*patch));}
+else if(k>4.5&&k<5.5){float w=atan(T.z,T.x);c*=.98+.034*cos(w*24.+T.y*2.)+.017*sin(w*67.);c=mix(c,vec3(.65,.40,.18),.84*smoothstep(.92,1.37,T.y));c*=1.-.13*pow(.5+.5*sin(w*47.+T.y*2.),9.)*smoothstep(.64,1.3,T.y);}
+else if(k>5.5&&k<6.5){float u=T.z*26.+1.75*sin(T.x*4.7)+.68*sin(T.x*10.+T.z*7.)+.8*noise(T*8.);float fat=pow(.5+.5*sin(u),5.)*smoothstep(.08,.71,noise(T*vec3(5.,4.,7.)));c=mix(c,vec3(.99,.87,.71),fat*.70);c*=.95+.091*speck+.033*sin(u*5.);float roast=clamp(T.y,0.,1.);float spot=smoothstep(.43,.72,noise(vec3(T.x*8.,.7,T.z*12.)));c=mix(c,c*vec3(.59,.51,.42),roast*spot*.79);c+=roast*.085*pow(.5+.5*sin(u*.67+.3),5.);}
+else if(k>6.5&&k<7.5){float a=abs(fract((T.x*1.4+abs(T.z)*2.6+.12*sin(T.x*9.))*4.)-.5);c=mix(c,vec3(.91,.93,.65),.32*smoothstep(.12,.01,a));c*=.95+.08*speck;}
+else if(k>7.5&&k<8.5){c*=.95+.08*speck+.018*grain;}
+float diff=max(dot(n,ld),0.);vec3 q=L.xyz/L.w*.5+.5;float vis=shade(q,.0013+.0017*(1.-diff));vec3 hemi=mix(vec3(.47,.43,.39),vec3(.86,.9,.95),n.y*.5+.5);vec3 illum=hemi*.83+vec3(1.,.80,.54)*(.55*diff*vis)+vec3(.23,.155,.095)*max(0.,dot(n,normalize(vec3(-.8,.2,.65))));float spec=pow(max(dot(n,normalize(ld+v)),0.),mix(17.,82.,g))*g;float ao=1.;for(int i=0;i<5;i++){vec3 off=P-anchors[i];float rad=i==0?.73:i==1?1.32:i==2?.63:i==3?.36:1.04;float shape=dot(off.xz,off.xz)/(rad*rad);float low=i==1?-.49:i==0?0.:-.06;float gap=abs(off.y-low);ao-=.28*exp(-1.6*shape-8.*gap)*max(0.,n.y);}illum*=max(.62,ao);float ray=P.x*.72+P.z*.59+P.y*.35;float stripe=smoothstep(-.25,.28,sin(ray*2.35+.29));float windowlight=(.62+.38*stripe)*(.99+.01*sin(time*.33));if(P.z> -4.8&&P.y<3.6){illum*=mix(vec3(.78,.83,.86),vec3(1.07,1.015,.94),windowlight);illum+=vec3(.075,.034,0.)*diff*windowlight;}if(k>3.5&&k<4.8)illum=mix(illum,vec3(1.08,1.045,.967),.58+.22*clamp((k-4.)*3.,0.,1.));vec3 outc=c*illum+vec3(1.,.87,.64)*spec*vis*.58;outc+=vec3(.95,.94,.84)*g*.15*pow(1.-max(dot(v,n),0.),3.);if(g>.49&&k<8.5){vec3 rr=reflect(-v,n);float rect=smoothstep(-.09,.12,-rr.z)*smoothstep(.1,.35,rr.y)*(1.-smoothstep(.80,.95,rr.y));outc+=vec3(.10,.08,.055)*g*rect;}if(k>8.5&&k<9.5)outc=c*(.98+.02*sin(time*.28));float fog=smoothstep(12.,33.,-P.z);outc=mix(outc,vec3(.96,.77,.66),fog*.21);if(k>9.5){float bevel=smoothstep(.075,.17,-T.z);float brushed=.014*hash(floor(T*vec3(75.,480.,420.)));outc=mix(vec3(.92,.89,.75),mix(vec3(.61,.64,.60),vec3(.86,.86,.77),smoothstep(-.7,.24,T.x*.47-T.z*.85)),bevel);outc+=brushed+.028*sin(T.x*5.+T.y*2.);outc*=.91+.09*vis;}float gdist=distance(P.xz,glint.xz)/max(.01,glint.w);float focusGlow=(1.-smoothstep(.54,1.05,gdist))*smoothstep(-.06,.17,P.y-glint.y)*(.5+.5*sin(time*3.));outc+=vec3(.064,.038,.012)*focusGlow;vec2 screen=gl_FragCoord.xy/resolution-.5;outc*=1.-.125*dot(screen,screen);gl_FragColor=vec4(outc,opacity);}`;
+function program(v, f) {
+  let p = gl.createProgram();
+  for (let [type, src] of [[gl.VERTEX_SHADER, v], [gl.FRAGMENT_SHADER, f]]) {
+    let s = gl.createShader(type);
+    gl.shaderSource(s, src);
+    gl.compileShader(s);
+    if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) throw Error(gl.getShaderInfoLog(s));
+    gl.attachShader(p, s);
+  }
+  gl.linkProgram(p);
+  if (!gl.getProgramParameter(p, gl.LINK_STATUS)) throw Error(gl.getProgramInfoLog(p));
+  return p;
+}
+const colorProgram = program(vertex, fragment),
+  shadowProgram = program('attribute vec3 p;uniform mat4 model,vp;void main(){gl_Position=vp*model*vec4(p,1.);}', 'precision highp float;void main(){float h=floor(gl_FragCoord.z*255.)/255.;gl_FragColor=vec4(h,fract(gl_FragCoord.z*255.),0.,1.);}');
+function locations(p) {
+  return {
+    p,
+    a: ['p', 'n', 'col', 'tex', 'surface'].map(k => gl.getAttribLocation(p, k)),
+    u: Object.fromEntries(['vp', 'model', 'light', 'eye', 'time', 'resolution', 'shadow', 'anchors[0]', 'glint', 'opacity', 'browning'].map(k => [k, gl.getUniformLocation(p, k)]))
+  };
+}
+const colorLoc = locations(colorProgram),
+  depthLoc = locations(shadowProgram),
+  shadowSize = 1024,
+  shadowTex = gl.createTexture(),
+  fb = gl.createFramebuffer(),
+  rb = gl.createRenderbuffer();
+gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, shadowSize, shadowSize, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+for (let p of [gl.TEXTURE_MIN_FILTER, gl.TEXTURE_MAG_FILTER]) gl.texParameteri(gl.TEXTURE_2D, p, gl.NEAREST);
+for (let p of [gl.TEXTURE_WRAP_S, gl.TEXTURE_WRAP_T]) gl.texParameteri(gl.TEXTURE_2D, p, gl.CLAMP_TO_EDGE);
+gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, shadowTex, 0);
+gl.bindRenderbuffer(gl.RENDERBUFFER, rb);
+gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT16, shadowSize, shadowSize);
+gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, rb);
+gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+gl.enable(gl.DEPTH_TEST);
+const light = mm([.126, 0, 0, 0, 0, .138, 0, 0, 0, 0, -.050, 0, 0, 0, 0, 1], view([-6.36, 10.92, -5.4], [0, 0, 0]));
+class Mesh {
+  constructor(indexed = false) {
+    this.data = [];
+    this.indices = indexed ? [] : null;
+    this.m = identity();
+  }
+  vertex(p, n, m, t = p) {
+    if (this.indices) this.indices.push(this.data.length / 14);
+    return this.append(p, n, m, t);
+  }
+  append(p, n, m, t = p) {
+    let id = this.data.length / 14;
+    this.data.push(...transform(this.m, p), ...unit(transform(this.m, n, 0)), ...m.c, ...t, m.k, m.g);
+    return id;
+  }
+  tri(a, b, c, m) {
+    const n = unit(cross(sub(b, a), sub(c, a)));
+    for (let p of [a, b, c]) this.vertex(p, n, m);
+  }
+  group(m, fn) {
+    let old = this.m;
+    this.m = mm(old, m);
+    fn();
+    this.m = old;
+  }
+}
+let mesh = new Mesh();
+const group = (m, fn) => mesh.group(m, fn);
+function grid(nu, nv, fn, m) {
+  let indexed = mesh.indices !== null,
+    rows = [];
+  for (let j = 0; j <= nv; j++) {
+    let row = [];
+    for (let i = 0; i <= nu; i++) {
+      let v = fn(i / nu, j / nv);
+      row.push(indexed ? mesh.append(v[0], v[1], v[2] || m, v[3] || v[0]) : v);
+    }
+    rows.push(row);
+  }
+  for (let j = 0; j < nv; j++) for (let i = 0; i < nu; i++) {
+    let a = rows[j][i],
+      b = rows[j][i + 1],
+      c = rows[j + 1][i + 1],
+      d = rows[j + 1][i];
+    if (indexed) mesh.indices.push(a, b, c, a, c, d);else for (let v of [a, b, c, a, c, d]) mesh.vertex(v[0], v[1], v[2] || m, v[3] || v[0]);
+  }
+}
+function ball(x, y, z, rx, ry, rz, m, nu = 22, nv = 14) {
+  grid(nu, nv, (u, v) => {
+    let t = u * TAU,
+      h = v * PI - PI / 2,
+      d = [cos(t) * cos(h), sin(h), sin(t) * cos(h)];
+    return [[x + d[0] * rx, y + d[1] * ry, z + d[2] * rz], unit([d[0] / rx, d[1] / ry, d[2] / rz])];
+  }, m);
+}
+function lathe(x, y, z, profile, m, N = 48, sz = 1) {
+  for (let j = 1; j < profile.length; j++) {
+    let a = profile[j - 1],
+      b = profile[j],
+      dy = b[1] - a[1],
+      dr = b[0] - a[0];
+    grid(N, 1, (u, v) => {
+      let t = u * TAU,
+        r = mix(a[0], b[0], v);
+      return [[x + r * cos(t), y + mix(a[1], b[1], v), z + r * sin(t) * sz], unit([dy * cos(t), -dr, dy * sin(t) / sz])];
+    }, b[2] || m);
+  }
+}
+function roundRect(w, d, r, N = 5) {
+  let out = [];
+  r = Math.min(r, w / 2 - .0001, d / 2 - .0001);
+  for (let k = 0; k < 4; k++) {
+    let x = (k === 0 || k === 3 ? 1 : -1) * (w / 2 - r),
+      z = (k <= 1 ? 1 : -1) * (d / 2 - r);
+    for (let i = 0; i <= N; i++) {
+      let t = (k + i / N) * PI / 2;
+      out.push([x + r * cos(t), z + r * sin(t)]);
+    }
+  }
+  return out;
+}
+function extrude(poly, levels, m) {
+  let layers = levels.map(([y, scale]) => poly.map(([x, z]) => [x * scale, y, z * scale]));
+  for (let i = 0; i < poly.length; i++) {
+    let k = (i + 1) % poly.length;
+    mesh.tri([0, levels[0][0], 0], layers[0][i], layers[0][k], m);
+    for (let j = 1; j < layers.length; j++) {
+      let a = layers[j - 1][i],
+        b = layers[j - 1][k],
+        c = layers[j][k],
+        d = layers[j][i];
+      mesh.tri(a, d, c, m);
+      mesh.tri(a, c, b, m);
+    }
+    let top = layers.at(-1);
+    mesh.tri([0, levels.at(-1)[0], 0], top[k], top[i], m);
+  }
+}
+function box(x, y, z, w, h, d, m, r = .02) {
+  let bevel = Math.min(r * .27, h * .22, .035);
+  group(pose(x, y, z), () => extrude(roundRect(w, d, Math.max(.001, r), r < .04 ? 2 : 5), [[-h / 2, .983], [-h / 2 + bevel, 1], [h / 2 - bevel, 1], [h / 2, .984]], m));
+}
+function tube(points, r, m, N = 9) {
+  for (let j = 0; j < points.length - 1; j++) {
+    let a = points[j],
+      b = points[j + 1];
+    function ring(k, u) {
+      let pt = points[k],
+        dir = unit(sub(points[Math.min(k + 1, points.length - 1)].slice(0, 3), points[Math.max(k - 1, 0)].slice(0, 3)));
+      let s = unit(cross(dir, Math.abs(dir[1]) > .92 ? [1, 0, 0] : [0, 1, 0])),
+        t = cross(dir, s),
+        normal = add(mul(s, cos(u * TAU)), mul(t, sin(u * TAU)));
+      return [add(pt.slice(0, 3), mul(normal, pt[3] ?? r)), normal];
+    }
+    grid(N, 1, (u, v) => ring(v ? j + 1 : j, u), m);
+  }
+}
+const objects = [];
+function object(fn, model = identity(), casts = true) {
+  let old = mesh;
+  mesh = new Mesh(true);
+  fn();
+  let o = {
+    buf: gl.createBuffer(),
+    count: 0,
+    model,
+    casts,
+    visible: true
+  };
+  if (mesh.indices.length && mesh.data.length / 14 < 65536) {
+    upload(o, mesh.data);
+    o.elements = gl.createBuffer();
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.elements);
+    gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, new Uint16Array(mesh.indices), gl.STATIC_DRAW);
+    o.count = mesh.indices.length;
+  } else if (mesh.indices.length) {
+    const flat = new Float32Array(mesh.indices.length * 14);
+    for (let i = 0; i < mesh.indices.length; i++) {
+      let k = mesh.indices[i] * 14;
+      for (let j = 0; j < 14; j++) flat[i * 14 + j] = mesh.data[k + j];
+    }
+    upload(o, flat);
+  } else upload(o, mesh.data);
+  mesh = old;
+  objects.push(o);
+  return o;
+}
+function upload(o, data) {
+  let arr = data instanceof Float32Array ? data : new Float32Array(data);
+  gl.bindBuffer(gl.ARRAY_BUFFER, o.buf);
+  gl.bufferData(gl.ARRAY_BUFFER, arr, gl.DYNAMIC_DRAW);
+  o.count = arr.length / 14;
+}
+function draw(loc, depth) {
+  function submit(o) {
+    gl.bindBuffer(gl.ARRAY_BUFFER, o.buf);
+    for (let i = 0; i < 5; i++) {
+      let a = loc.a[i];
+      if (a < 0) continue;
+      gl.enableVertexAttribArray(a);
+      gl.vertexAttribPointer(a, i === 4 ? 2 : 3, gl.FLOAT, false, 56, [0, 12, 24, 36, 48][i]);
+    }
+    gl.uniformMatrix4fv(loc.u.model, false, o.model);
+    if (!depth) {
+      gl.uniform1f(loc.u.opacity, o.opacity ?? 1);
+      gl.uniform1f(loc.u.browning, o.browning || 0);
+    }
+    if (o.elements) {
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, o.elements);
+      gl.drawElements(gl.TRIANGLES, o.count, gl.UNSIGNED_SHORT, 0);
+    } else gl.drawArrays(gl.TRIANGLES, 0, o.count);
+  }
+  let glass = [];
+  for (let o of objects) {
+    if (!o.visible || !o.count || depth && !o.casts) continue;
+    if (!depth && o.opacity < .995) glass.push(o);else submit(o);
+  }
+  if (glass.length) {
+    glass.sort((a, b) => dot(camDir, sub(objectPoint(b), objectPoint(a))));
+    gl.enable(gl.BLEND);
+    gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
+    gl.depthMask(false);
+    glass.forEach(submit);
+    gl.depthMask(true);
+    gl.disable(gl.BLEND);
+  }
+}
+const cream = mat('#f4edcf', 2, .67),
+  porcelain = mat('#fffae9', 2, .72),
+  pine = mat('#3e6253', 2, .58),
+  forest = mat('#284d41', 2, .63),
+  brass = mat('#b79254', 2, .78),
+  wood = mat('#b58150', 1, .25),
+  walnut = mat('#724e35', 1, .3),
+  maple = mat('#cd9b69', 1, .30),
+  iron = mat('#3c4038', 8, .34),
+  steel = mat('#b7bab0', 2, .87),
+  navy = mat('#354f57', 2, .4),
+  leaf = mat('#80974d', 7, .31);
+const stage = {
+  board: [-1.15, .24, 1.28],
+  onion: [-1.12, .24, 1.18],
+  pan: [2.05, .52, -.98],
+  plate: [2.57, .18, 1.95],
+  cabbage: [-3.18, .12, -.65],
+  sauce: [-.18, 0, -1.27],
+  sink: [4.28, .07, -3.65],
+  cloth: [-2.5, 0, 1.55],
+  tray: [3.78, .11, .64]
+};
+let serial = 0,
+  foods = [],
+  cuts = [],
+  grip = null,
+  cut = null,
+  lastCut = null,
+  now = 0,
+  lastInput = 0,
+  focus = 0,
+  meal = false,
+  washing = false,
+  clean = false,
+  washed = 0,
+  firstServed = false,
+  follow = 0,
+  portrait = false,
+  changedLayout = false;
+const locations0 = Object.fromEntries(Object.entries(stage).map(([k, p]) => [k, p.slice()]));
+const steelFood = mat('#f4f1d5', 4, .48),
+  onionSkin = mat('#ddc592', 5, .48);
+const bulbYaw = .99;
+const bulbRotation = pose(0, 0, 0, bulbYaw),
+  inverseBulb = pose(0, 0, 0, -bulbYaw);
+function toBulb(v) {
+  return transform(inverseBulb, v);
+}
+function bulbPolygons() {
+  let variation = .975 + Math.random() * .045,
+    twist = Math.random() * TAU;
+  let rings = [[.19, 0], [.49, .04], [.78, .18], [.98, .41], [1, .62], [.88, .82], [.68, .97], [.47, 1.06], [.27, 1.15], [.14, 1.25], [.08, 1.29], [.052, 1.34], [.071, 1.38]],
+    p = [];
+  for (let j = 0; j < rings.length - 1; j++) for (let i = 0; i < 40; i++) {
+    let corners = [[j, i], [j, i + 1], [j + 1, i + 1], [j + 1, i]],
+      v = corners.map(([r, k]) => {
+        let t = k * TAU / 40;
+        let rr = rings[r][0] * (1 + .012 * sin(3 * t + twist));
+        return [rr * cos(t) * variation, rings[r][1], rr * sin(t) * .83];
+      });
+    p.push({
+      v,
+      m: onionSkin
+    });
+  }
+  for (let j of [0, rings.length - 1]) p.push({
+    v: Array.from({
+      length: 40
+    }, (_, i) => [rings[j][0] * cos(i * TAU / 40), rings[j][1], rings[j][0] * sin(i * TAU / 40) * .83]),
+    m: onionSkin
+  });
+  const half = splitSolid(p, [.12, 0, .993], .18)[0],
+    orientation = pose(0, 0, 0, bulbYaw);
+  return half.map(poly => ({
+    m: poly.m,
+    v: poly.v.map(v => transform(orientation, v))
+  }));
+}
+// Clip each face, then close both solids with the same ordered intersection contour.
+function splitSolid(polys, n, offset) {
+  let halves = [[], []],
+    seam = [];
+  for (let poly of polys) {
+    let out = [[], []];
+    for (let i = 0; i < poly.v.length; i++) {
+      let a = poly.v[i],
+        b = poly.v[(i + 1) % poly.v.length],
+        da = dot(a, n) - offset,
+        db = dot(b, n) - offset;
+      for (let s = 0; s < 2; s++) if ((s ? da : -da) >= -1e-7) out[s].push(a);
+      if (da * db < -1e-12) {
+        let c = lerp(a, b, da / (da - db));
+        out[0].push(c);
+        out[1].push(c);
+        seam.push(c);
+      }
+    }
+    for (let s = 0; s < 2; s++) if (out[s].length > 2) halves[s].push({
+      v: out[s],
+      m: poly.m
+    });
+  }
+  if (seam.length > 2) {
+    let pts = [...new Map(seam.map(p => [p.map(v => Math.round(v * 10000)).join(','), p])).values()],
+      c = mul(pts.reduce(add, [0, 0, 0]), 1 / pts.length),
+      axis = [n[2], 0, -n[0]];
+    pts.sort((a, b) => Math.atan2(a[1] - c[1], dot(sub(a, c), axis)) - Math.atan2(b[1] - c[1], dot(sub(b, c), axis)));
+    for (let s = 0; s < 2; s++) halves[s].push({
+      v: s ? pts.slice().reverse() : pts,
+      m: steelFood
+    });
+  }
+  return halves;
+}
+function solidData(polys, center = [0, 0, 0]) {
+  let m = new Mesh();
+  for (let poly of polys) {
+    const vs = poly.v,
+      face = poly.m === steelFood;
+    let norm = [0, 0, 0];
+    for (let i = 0; i < vs.length; i++) norm = add(norm, cross(vs[i], vs[(i + 1) % vs.length]));
+    norm = unit(norm);
+    function put(v) {
+      let tex = toBulb(v),
+        n = face ? norm : transform(bulbRotation, unit([tex[0], (tex[1] - .47) * 1.9, tex[2] * 1.3]), 0);
+      m.vertex(sub(v, center), n, poly.m, tex);
+    }
+    if (!face) {
+      for (let i = 1; i < vs.length - 1; i++) {
+        put(vs[0]);
+        put(vs[i]);
+        put(vs[i + 1]);
+      }
+      continue;
+    }
+    let mid = mul(vs.reduce(add, [0, 0, 0]), 1 / vs.length);
+    for (let j = 0; j < 6; j++) for (let i = 0; i < vs.length; i++) {
+      let a = vs[i],
+        b = vs[(i + 1) % vs.length],
+        innerA = lerp(mid, a, j / 6),
+        innerB = lerp(mid, b, j / 6),
+        outerA = lerp(mid, a, (j + 1) / 6),
+        outerB = lerp(mid, b, (j + 1) / 6);
+      put(innerA);
+      put(outerA);
+      put(outerB);
+      if (j) {
+        put(innerA);
+        put(outerB);
+        put(innerB);
+      }
+    }
+  }
+  return new Float32Array(m.data);
+}
+function openLayers(c) {
+  let b = c.raw.slice(),
+    pr = c.progress;
+  for (let i = 0; i < b.length; i += 14) {
+    let x = b[i + 9],
+      y = b[i + 10],
+      z = b[i + 11],
+      shell = Math.hypot(x, (y - .35) * .97, z * .87);
+    let opened = clamp((pr + shell * .44 - .36) * 1.6, 0, 1);
+    let lag = .007 * sin(shell * 61.) + .064 * opened * opened * (y + .05);
+    b[i] += c.n[0] * lag;
+    b[i + 2] += c.n[2] * lag;
+    b[i + 1] -= .025 * pr * opened * (1 - shell);
+  }
+  upload(c.obj, b);
+}
+let body = bulbPolygons(),
+  bodyObj = object(() => {});
+upload(bodyObj, solidData(body));
+let bodyPose = identity(),
+  vegScale = 1;
+function bounds(polys) {
+  let lo = [9, 9, 9],
+    hi = [-9, -9, -9];
+  for (let p of polys) for (let v of p.v) for (let i = 0; i < 3; i++) {
+    lo[i] = Math.min(lo[i], v[i]);
+    hi[i] = Math.max(hi[i], v[i]);
+  }
+  return {
+    lo,
+    hi,
+    center: lerp(lo, hi, .5)
+  };
+}
+function food(type, x, z, len, width, angle, zone) {
+  let f = {
+    id: ++serial,
+    type,
+    x,
+    z,
+    tx: x,
+    tz: z,
+    y: 0,
+    vy: 0,
+    len,
+    width,
+    angle,
+    zone,
+    history: [zone],
+    temp: 0,
+    heat: 0,
+    brown: 0,
+    soft: 0,
+    sauce: 0,
+    side: 0,
+    flip: 0,
+    turn: 0,
+    age: 0,
+    curl: 0,
+    tilt: 0,
+    spin: 0,
+    compression: 0,
+    load: 0,
+    seed: rnd() * TAU,
+    rest: 0,
+    scale: 1,
+    consumed: 0,
+    gripAt: 0,
+    stack: false,
+    holdHeight: 0,
+    support: 0,
+    lastMesh: -1,
+    nodes: Array.from({
+      length: 13
+    }, () => ({
+      y: 0,
+      vy: 0,
+      heat: 0,
+      face: [0, 0],
+      sauce: 0,
+      contact: 0
+    })),
+    obj: object(() => {})
+  };
+  foods.push(f);
+  return f;
+}
+function moveZone(f, zone) {
+  if (zone !== f.zone) {
+    f.zone = zone;
+    f.history.push(zone);
+  }
+}
+function planeCut(dir, start) {
+  let a = Math.atan2(dir[2], dir[0]),
+    n = [-sin(a), 0, cos(a)],
+    mid = bounds(body).center;
+  if (dot(sub(start, mid), n) < 0) n = mul(n, -1);
+  let projections = body.flatMap(p => p.v.map(v => dot(v, n))),
+    hi = Math.max(...projections),
+    lo = Math.min(...projections);
+  let gap = clamp(hi - dot(start, n), .085, .48);
+  if (lastCut) gap = clamp(.065 + Math.abs(dot(sub(start, lastCut), n)) * .68, .07, .46);
+  gap = Math.min(gap, (hi - lo) * .6);
+  return {
+    n,
+    a,
+    width: gap,
+    halves: splitSolid(body, n, hi - gap)
+  };
+}
+function prepareBlade(c, dir) {
+  let plan = planeCut(dir, c.start);
+  if (plan.halves.some(h => !h.length)) return;
+  Object.assign(c, plan);
+  upload(bodyObj, solidData(c.halves[0]));
+  c.center = bounds(c.halves[1]).center;
+  c.raw = solidData(c.halves[1], c.center);
+  upload(c.obj, c.raw);
+}
+function releaseSlice(c) {
+  if (!c.halves) return;
+  body = c.halves[0];
+  let {
+      lo,
+      hi
+    } = bounds(c.halves[1]),
+    o = stage.onion,
+    scale = vegScale;
+  let f = food('onion', o[0] + c.center[0] * scale, o[2] + c.center[2] * scale, Math.hypot(hi[0] - lo[0], hi[2] - lo[2]) * scale, c.width * scale, c.a, 'board');
+  let old = f.obj;
+  objects.splice(objects.indexOf(old), 1);
+  gl.deleteBuffer(old.buf);
+  f.obj = c.obj;
+  f.raw = c.raw;
+  f.buffer = c.raw.slice();
+  f.cutNormal = c.n;
+  f.cutAngle = c.a;
+  f.cutWidth = c.width;
+  f.localCenter = c.center;
+  f.cutScale = scale;
+  f.fiber = Math.abs(cos(c.a + bulbYaw));
+  f.y = c.center[1] * scale + o[1];
+  f.tilt = c.progress * .17;
+  f.tx += c.n[0] * (.33 + c.width) * scale;
+  f.tz += c.n[2] * (.33 + c.width) * scale;
+  f.spin = 1.7;
+  f.vy = .35;
+  f.lastMesh = -1;
+  lastCut = c.start;
+  cuts.push(f);
+  sound('board', .65, c.width);
+  if (Math.min(...sub(bounds(body).hi, bounds(body).lo)) < .16 || cuts.filter(p => p.batch === batch).length >= 9) refill = true;
+  f.batch = batch;
+  return f;
+}
+let batch = 0,
+  refill = false,
+  burner = false;
+function rebuildBulb() {
+  body = bulbPolygons();
+  upload(bodyObj, solidData(body));
+  lastCut = null;
+  refill = false;
+  batch++;
+}
+function sliceData(f) {
+  let raw = f.raw,
+    b = f.buffer,
+    n = f.cutNormal,
+    t = f.tilt,
+    ct = cos(t),
+    st = sin(t),
+    sc = f.cutScale * (1 - .065 * f.soft);
+  for (let i = 0; i < raw.length; i += 14) {
+    let px = raw[i],
+      py = raw[i + 1],
+      pz = raw[i + 2],
+      d = px * n[0] + pz * n[2],
+      u = px * n[2] - pz * n[0];
+    let bend = f.curl * (u * u * (.75 + f.fiber) + Math.max(0, py) * .24);
+    let k = d * ct + py * st;
+    let y = py * ct - d * st - bend;
+    b[i] = (n[0] * k + n[2] * u) * sc;
+    b[i + 1] = y * sc;
+    b[i + 2] = (n[2] * k - n[0] * u) * sc;
+    let dn = raw[i + 3] * n[0] + raw[i + 5] * n[2],
+      un = raw[i + 3] * n[2] - raw[i + 5] * n[0],
+      nk = dn * ct + raw[i + 4] * st;
+    b[i + 3] = n[0] * nk + n[2] * un;
+    b[i + 4] = raw[i + 4] * ct - dn * st;
+    b[i + 5] = n[2] * nk - n[0] * un;
+    for (let j = 0; j < 3; j++) b[i + 6 + j] = mix(raw[i + 6 + j], [.67, .39, .13][j], f.brown * .78) - f.soft * [.015, .02, 0][j];
+    b[i + 12] = raw[i + 12] + (raw[i + 12] === 4 ? f.soft * .36 : 0);
+    b[i + 13] = .4 + f.soft * .5;
+  }
+  upload(f.obj, b);
+}
+function meatData(f) {
+  let m = new Mesh(),
+    N = f.nodes.length - 1,
+    M = 7,
+    rows = [[], []],
+    raw = [.83, .43, .38],
+    cooked = [.77, .53, .32],
+    seared = [.44, .235, .115];
+  for (let side = 0; side < 2; side++) for (let i = 0; i <= N; i++) {
+    let u = i / N,
+      node = f.nodes[i],
+      w = f.width * (.28 + .72 * Math.pow(Math.max(0, sin(PI * u)), .43)) * (.98 + .09 * sin(14 * u + f.seed));
+    let row = [];
+    for (let j = 0; j <= M; j++) {
+      let v = j / M * 2 - 1,
+        x = (u - .5) * f.len * (1 - f.heat * .07) + .038 * v * sin(u * 9 + f.seed),
+        z = v * w * .5 + .082 * sin(u * 6 + f.seed);
+      let y = node.y + (!side ? Math.min(.045, node.sauce * .014) * Math.exp(-v * v * 6) : 0) + (.016 + .055 * (1 - v * v)) * (side ? -1 : 1) + .04 * v * sin(u * 9 + f.seed);
+      let slope = (f.nodes[Math.min(N, i + 1)].y - f.nodes[Math.max(0, i - 1)].y) / (f.len / N * (i === 0 || i === N ? 1 : 2));
+      let n = unit([-slope, side ? -1 : 1, v * .18]);
+      let fat = (j === 0 || j === M) && sin(u * 7 + f.seed) > .05;
+      let col = lerp(raw, cooked, Math.min(1, node.heat * 2));
+      // Heat travels through the slice. Most of the crust stays on the face that touched iron.
+      const crust = node.face[1 - side] * .85 + node.face[side] * .15;
+      col = lerp(col, seared, crust);
+      if (fat) col = lerp(col, [.98, .84, .65], .7);
+      col = lerp(col, [.64, .30, .085], Math.min(.73, node.sauce * .49));
+      const centerZ = .082 * sin(u * 6 + f.seed);
+      const lateral = z - centerZ,
+        thickness = y - node.y;
+      const cs = cos(f.flip),
+        sn = sin(f.flip);
+      const rolledY = node.y + thickness * cs - lateral * sn + Math.abs(sn) * f.width * .5;
+      const rolledZ = centerZ + lateral * cs + thickness * sn;
+      const normal = [n[0], n[1] * cs - n[2] * sn, n[2] * cs + n[1] * sn];
+      row.push([[x, rolledY, rolledZ], normal, mat(col, 6, .38 + Math.min(.58, node.sauce * .36)), [x, crust, z]]);
+    }
+    rows[side].push(row);
+  }
+  function quad(a, b, c, d) {
+    for (let v of [a, b, c, a, c, d]) m.vertex(...v);
+  }
+  for (let i = 0; i < N; i++) {
+    for (let j = 0; j < M; j++) for (let s = 0; s < 2; s++) {
+      let a = rows[s];
+      quad(a[i][j], a[i][j + 1], a[i + 1][j + 1], a[i + 1][j]);
+    }
+    for (let j of [0, M]) quad(rows[0][i][j], rows[0][i + 1][j], rows[1][i + 1][j], rows[1][i][j]);
+  }
+  for (let i of [0, N]) for (let j = 0; j < M; j++) quad(rows[0][i][j], rows[1][i][j], rows[1][i][j + 1], rows[0][i][j + 1]);
+  if (f.sauce > .30) {
+    let prev = mesh;
+    mesh = m;
+    for (let i = 1; i < N; i += 2) {
+      let n = f.nodes[i];
+      if (n.sauce < .65) continue;
+      let u = i / N,
+        x = (u - .5) * f.len * (1 - f.heat * .07),
+        z = .065 * sin(u * 6 + f.seed);
+      let size = Math.min(.14, .035 + .036 * n.sauce);
+      let y = n.y + .077 + Math.min(.045, n.sauce * .014);
+      ball(x, y, z, size * (1 + .28 * sin(i)), .009 + .004 * n.sauce, size * .49, mat('#9c572c', 2, .92), 10, 5);
+    }
+    mesh = prev;
+  }
+  upload(f.obj, m.data);
+}
+function cabbageData(f) {
+  let old = mesh;
+  mesh = new Mesh();
+  let top = mat('#cfdd98', 7, .36),
+    edge = mat('#f0ebbe', 7, .35);
+  for (let s of [-1, 1]) grid(20, 3, (u, v) => {
+    let t = u * PI,
+      h = sin(t) * f.rest - (1 - sin(t)) * f.support + (u - .5) ** 2 * f.curl + .026 * sin(u * 13 + f.seed),
+      z = (v - .5) * f.width + .1 * sin(u * 7 + f.seed);
+    return [[(u - .5) * f.len, h + (v - .5) * .06 * cos(u * 8) + s * .014, z], unit([-cos(t) * f.rest * PI / f.len, s, .18 * cos(u * 8)]), v < .25 ? edge : top];
+  }, top);
+  upload(f.obj, mesh.data);
+  mesh = old;
+}
+function ellipseRing(x, y, z, r, t, m, sz = 1) {
+  lathe(x, y, z, Array.from({
+    length: 9
+  }, (_, k) => [r + t * cos(k * TAU / 8), t * sin(k * TAU / 8)]), m, 56, sz);
+}
+function petal(x, y, z, rad, count, m) {
+  for (let i = 0; i < count; i++) group(pose(x, y, z, i * TAU / count), () => ball(0, 0, rad * .57, rad * .27, .006, rad * .45, m, 8, 4));
+  ball(x, y + .004, z, rad * .19, .007, rad * .19, brass, 9, 4);
+}
+function dish(r, decor = true) {
+  lathe(0, 0, 0, [[.01, .028], [r * .43, .028], [r * .57, .043], [r * .84, .088], [r * .973, .144], [r, .176], [r * .99, .194], [r * .967, .20], [r * .87, .168], [r * .72, .111], [r * .52, .087], [.001, .085]], porcelain, 64);
+  if (decor) {
+    ellipseRing(0, .191, 0, r * .982, .012, navy);
+    ellipseRing(0, .151, 0, r * .833, .009, navy);
+    ellipseRing(0, .146, 0, r * .815, .005, navy);
+    for (let i = 0; i < 9; i++) {
+      let a = i * TAU / 9;
+      petal(r * .906 * cos(a), .185, r * .906 * sin(a), r * .059, 5, navy);
+      group(pose(r * .91 * cos(a + .17), .181, r * .91 * sin(a + .17), -a), () => ball(0, 0, 0, .052, .009, .018, navy, 8, 4));
+    }
+  }
+}
+function bowl(x, y, z, r, m = cream) {
+  lathe(x, y, z, [[.001, 0], [r * .46, 0], [r * .49, .06], [r * .65, r * .21], [r * .88, r * .43], [r, r * .72], [r * .985, r * .76], [r * .925, r * .74], [r * .82, r * .48], [r * .56, r * .24], [.001, r * .18]], m, 36);
+  ellipseRing(x, y + r * .72, z, r * .996, .013, navy);
+}
+function ceramicJar(x, y, z, r, h, m) {
+  lathe(x, y, z, [[.01, .01], [r * .79, .01], [r, .08], [r, h * .73], [r * .88, h * .85], [r * .61, h * .9], [r * .6, h], [r * .49, h]], m, 36);
+  lathe(x, y + h, z, [[r * .55, -.02], [r * .71, .025], [r * .71, .07], [r * .53, .1], [.01, .1]], walnut, 32);
+  ball(x, y + h + .11, z, r * .16, .075, r * .16, walnut, 14, 8);
+}
+function windowCurtain(left) {
+  let fabric = mat('#eee6ce', 8, .07),
+    trim = mat('#779084', 8, .08);
+  grid(64, 12, (u, v) => {
+    let x = (left ? -4.56 : 4.15) + u * (left ? 1.36 : 1.36);
+    let scallop = .08 * cos(u * TAU * 7);
+    let y = 3.03 + v * 1.74 + (1 - v) * (.25 * (left ? u : 1 - u) + scallop);
+    let z = -4.68 + .095 * cos(u * TAU * 8);
+    return [[x, y, z], unit([sin(u * TAU * 8) * .75, 0, 1]), v < .13 && v > .035 ? trim : fabric];
+  }, fabric);
+}
+function tree(x, y, z, h) {
+  let phase = rnd() * TAU,
+    trunk = mat('#716255'),
+    green = mat('#4b6963', 8),
+    snow = mat('#e5e5db', 8);
+  lathe(x, y, z, [[h * .032, 0], [h * .019, h * .75]], trunk, 7);
+  for (let j = 0; j < 4; j++) {
+    let ht = h * (.49 - j * .06),
+      base = y + h * (.11 + j * .19),
+      w = h * (.27 - j * .048);
+    grid(14, 3, (u, v) => {
+      let a = u * TAU,
+        fringe = .7 + .29 * cos(a * 7 + phase + j * .56),
+        rad = w * (1 - v) * (.84 + .16 * fringe);
+      return [[x + rad * cos(a), base + v * ht - (1 - v) * h * .09 * fringe, z + rad * sin(a)], unit([cos(a), .65, sin(a)]), v < .28 ? green : snow];
+    }, snow);
+  }
+}
+const room = object(() => {
+  // The outdoor hills and pines stand at different distances behind the window.
+  grid(20, 18, (u, v) => {
+    let a = -PI + u * TAU,
+      b = -.85 + v * 2.38,
+      d = [cos(b) * sin(a), sin(b), -cos(b) * cos(a)];
+    return [mul(d, 41), mul(d, -1), mat(lerp(rgb('#ffc38d'), rgb('#b3afbe'), clamp((d[1] + .15) * 2.9, 0, 1)), 9)];
+  }, cream);
+  ball(3.9, -1.55, -31, 1.15, 1.15, 1.15, mat('#fff0bd', 9), 38, 20);
+  const snowHeight = (x, z) => -2.22 + .042 * (z + 5) + .25 * sin(.47 * x + .1 * z) + .16 * cos(z * .64 + x * .3);
+  grid(70, 36, (u, v) => {
+    let x = (u - .5) * 63,
+      z = -30 + v * 26,
+      h = snowHeight(x, z);
+    return [[x, h, z], unit([-.118 * cos(.47 * x + .1 * z), 1, .08 * sin(z * .64 + x * .3)]), mat(lerp(rgb('#d7d6da'), rgb('#f6e9d9'), .53 + .36 * sin(x * .25 + z * .27)), 8)];
+  }, cream);
+  for (let band = 0; band < 3; band++) grid(86, 6, (u, v) => {
+    let x = (u - .5) * 76,
+      z = -34 + band * 3 + v * 3,
+      h = -3.75 + 1.9 * cos(x * .14 + band * 1.9) + 1.04 * cos(x * .38 - band) + .41 * cos(x * .71) + .24 * sin(x * 1.15);
+    return [[x, mix(h, -5., v), z], unit([.23 * sin(x * .21 + band), .45, 1]), mat(lerp(rgb(['#bc9fa0', '#bcaaa8', '#a6a4a2'][band]), rgb('#efc7aa'), .57 * (1 - v)), 9)];
+  }, cream);
+  for (let i = 0; i < 49; i++) {
+    let x = rnd() * 43 - 21,
+      z = -9 - rnd() * 18;
+    tree(x, snowHeight(x, z) - .08, z, 1.18 + rnd() * 2.23);
+  }
+  group(pose(2.8, -2.43, -12.2, -.17), () => {
+    box(0, .53, 0, 2.46, 1.06, 1.42, mat('#8d735b', 1), .025);
+    for (let side of [-1, 1]) group(pose(0, 1.26, side * .49, 0, side * .46), () => {
+      box(0, 0, 0, 2.99, .12, 1.28, walnut, .05);
+      box(0, .10, 0, 3.02, .14, 1.31, mat('#ece7de', 8), .10);
+    });
+    box(.56, .55, .725, .68, .64, .05, mat('#edc794', 9));
+    for (let x of [.26, .54, .86]) box(x, .55, .757, .035, .64, .04, walnut, .001);
+    box(.55, .55, .76, .67, .037, .032, walnut, .001);
+  });
+  const plaster = mat('#d6c6a6', 8);
+  box(-7.5, 2.1, -5.03, 5.65, 8, .25, plaster);
+  box(8.02, 2.2, -5.03, 4.9, 8, .25, plaster);
+  box(.5, .1, -5.04, 13, 2.15, .28, plaster);
+  box(0, 6, -5.04, 22, 2.45, .28, plaster);
+  for (let x = -9; x < 9; x += .76) for (let y = -.35; y < 1.12; y += .38) box(x, y, -4.83, .75, .37, .12, mat(lerp(rgb('#aeb8a0'), rgb('#d0d2bc'), rnd()), 2, .52), .025);
+  for (let x of [-4.67, -.1, 5.54]) box(x, 2.99, -4.82, x === -.1 ? .105 : .21, 3.81, .23, walnut, .023);
+  for (let y of [1.16, 4.83]) box(.44, y, -4.82, 10.44, .20, .29, walnut, .03);
+  box(.44, 1.06, -4.70, 10.7, .12, .59, wood, .04);
+  for (let x of [-2.42, 2.73]) box(x, 3, -4.93, .062, 3.67, .11, wood, .012);
+  box(.44, 3.68, -4.93, 10.1, .074, .11, wood, .012);
+  windowCurtain(true);
+  windowCurtain(false);
+  tube([[-4.95, 4.91, -4.61], [5.71, 4.91, -4.61]], .037, brass);
+  // The worktable has glazed individual tiles, a timber nosing and painted panel doors.
+  box(0, -.30, 1.98, 20, .55, 4.66, walnut, .04);
+  for (let i = -10; i < 10; i++) for (let j = -4; j < 5; j++) box(i * .94, -.058, j * .94, .933, .115, .933, mat(lerp(rgb('#345a4d'), rgb('#4e725f'), rnd() * .72), 2, .55), .025);
+  box(0, -.16, 4.34, 20, .28, .16, wood, .035);
+  box(0, -1.22, 4.18, 20, 1.92, .2, forest);
+  for (let i = -5; i < 6; i++) {
+    box(i * 1.52, -1.15, 4.32, 1.45, 1.62, .09, pine, .035);
+    box(i * 1.52, -1.16, 4.39, 1.15, 1.28, .04, forest, .025);
+    box(i * 1.52, -1.16, 4.42, 1.02, 1.16, .04, pine, .018);
+    ball(i * 1.52 + .47, -.57, 4.51, .064, .064, .064, brass, 12, 8);
+  }
+  // Shelves, crockery and utensils sit against the side wall.
+  box(-6.45, 2.91, -4.52, 3.04, .12, .82, wood);
+  box(-6.45, 1.93, -4.52, 3.04, .12, .82, wood);
+  for (let i = 0; i < 4; i++) {
+    ceramicJar(-7.44 + i * .64, 2.98, -4.47, .21, .48 + i % 2 * .18, i % 2 ? cream : pine);
+    bowl(-7.4 + i * .65, 2.0, -4.47, .30, cream);
+  }
+  for (let i = 0; i < 3; i++) ceramicJar(-.52 + i * .65, 1.12, -4.58, .20 + i * .025, .31 + i * .07, i === 1 ? pine : cream);
+  // Small potted winter herb.
+  group(pose(3.73, 1.13, -4.45), () => {
+    lathe(0, 0, 0, [[.12, 0], [.18, .32], [.21, .33], [.21, .4], [.16, .4]], mat('#aa704c', 2), 24);
+    for (let i = 0; i < 13; i++) {
+      let a = i * 2.4,
+        ht = .38 + rnd() * .28,
+        dx = cos(a) * .25,
+        dz = sin(a) * .21;
+      tube([[0, .29, 0], [dx * .5, ht, dz * .5], [dx, ht + .16, dz]], .012, pine, 5);
+      group(pose(dx, ht + .15, dz, a, .6), () => ball(0, 0, 0, .07, .17, .033, leaf, 10, 7));
+    }
+  });
+}, identity(), false);
+// Close furnishing casts shadows across the work surface.
+const pendant = object(() => {
+  tube([[0, 0, 0], [0, 1.8, 0]], .018, walnut, 8);
+  lathe(0, 0, 0, [[.05, 0], [.085, -.05], [.09, -.15], [.13, -.17], [.13, -.24]], brass, 28);
+  lathe(0, -.22, 0, [[.10, .02], [.15, -.015], [.19, -.12], [.30, -.22], [.49, -.32], [.54, -.36], [.54, -.39], [.51, -.404], [.43, -.356], [.22, -.245], [.12, -.15]], forest, 48);
+  ellipseRing(0, -.61, 0, .529, .011, brass);
+  ball(0, -.47, 0, .108, .13, .108, mat('#ffdea0', 9), 20, 10);
+}, pose(3.8, 3.62, -3.55));
+const sinkObj = object(() => {
+  box(0, .025, 0, 1.98, .08, 1.05, steel, .17);
+  box(0, .072, 0, 1.65, .04, .79, iron, .16);
+  box(0, .094, 0, 1.39, .022, .58, mat('#8a9c91', 2, .85), .14);
+  tube([[.55, .09, -.28], [.55, .84, -.28], [.55, 1.05, -.20], [.53, 1.10, .04], [.51, 1.02, .15], [.51, .86, .15]], .058, steel, 14);
+  lathe(.55, .09, -.28, [[.13, 0], [.13, .07], [.07, .1]], steel, 20);
+  for (let s of [-1, 1]) {
+    ball(.53 + s * .22, .22, -.27, .09, .09, .09, cream, 14, 9);
+    tube([[.54 + s * .19, .21, -.27], [.54 + s * .28, .28, -.27]], .045, steel);
+  }
+});
+const towel = object(() => {
+  let cloth = mat('#efe3c4', 8),
+    stripe = mat('#5f7a70', 8);
+  grid(44, 33, (u, v) => {
+    let x = (u - .5) * 3.43,
+      z = (v - .5) * 2.9,
+      h = .047 + .019 * sin(v * 16 + u * 2) + .014 * cos(u * 15 - v * 8);
+    let k = Math.floor(u * 44),
+      j = Math.floor(v * 33),
+      checker = Math.floor(u * 18) % 2 + Math.floor(v * 16) % 2;
+    let c = k === 2 || k === 4 || k === 39 || k === 41 || j === 2 || j === 30 ? stripe : mat(lerp(cloth.c, rgb('#ad8655'), checker * .21), 8);
+    return [[x, h, z], unit([.035 * sin(u * 15), 1, .045 * cos(v * 16)]), c];
+  }, cloth);
+  for (let i = 0; i < 45; i++) {
+    let x = (i / 44 - .5) * 3.4;
+    tube([[x, .024, 1.435], [x + .015, .02, 1.53 + .03 * rnd()]], .009, cloth, 4);
+  }
+});
+const boardObj = object(() => {
+  box(0, .12, 0, 4.64, .24, 2.64, maple, .27);
+  let path = roundRect(4.38, 2.39, .23, 8).map(([x, z]) => [x, .237, z]);
+  tube([...path, path[0]], .014, mat('#ab7c4f', 1), 6);
+  for (let i = 0; i < 11; i++) {
+    let x = (rnd() - .5) * 2.6,
+      z = (rnd() - .5) * 1.7;
+    tube([[x, .242, z], [x + .16 + rnd() * .3, .242, z - .08]], .002, mat('#b18c62'), 4);
+  }
+});
+const plateObj = object(() => dish(1.26));
+const meatTray = object(() => {
+  box(0, .058, 0, 2.16, .103, 1.04, porcelain, .18);
+  let rim = roundRect(2.10, .99, .16, 6).map(([x, z]) => [x, .128, z]);
+  tube([...rim, rim[0]], .044, cream, 8);
+  tube([...rim, rim[0]].map(([x, y, z]) => [x, y + .032, z]), .013, navy, 6);
+});
+const panObj = object(() => {
+  let enamel = mat('#e4d9ad', 2, .73);
+  box(0, -.33, 0, 2.82, .35, 2.47, forest, .22);
+  box(0, -.145, 0, 2.66, .075, 2.35, pine, .19);
+  lathe(0, -.10, 0, [[1.11, 0], [1.11, .07], [.91, .1]], iron, 40);
+  group(pose(.0, -.32, 1.26, 0, PI / 2), () => {
+    lathe(0, 0, 0, [[.185, 0], [.185, .12], [.15, .15], [.001, .15]], walnut, 32);
+    box(0, .152, 0, .025, .011, .15, brass);
+  });
+  lathe(0, 0, 0, [[.005, -.03], [1.01, -.03], [1.24, .015], [1.39, .16], [1.49, .40], [1.49, .46], [1.46, .488], [1.415, .478], [1.37, .37], [1.22, .14], [1.08, .065], [.006, .062]], iron, 72);
+  lathe(0, 0, 0, [[1.03, -.038], [1.27, .005], [1.407, .16], [1.501, .399], [1.506, .43]], enamel, 72);
+  ellipseRing(0, .454, 0, 1.487, .025, steel);
+  group(pose(0, 0, 0, .46), () => {
+    tube([[1.34, .26, .03], [1.66, .29, .03], [1.84, .34, .03]], .107, brass, 14);
+    tube([[1.65, .30, .03, .125], [1.83, .34, .03, .16], [2.66, .49, .03, .145], [2.78, .50, .03, .085]], .15, walnut, 18);
+    ball(2.77, .5, .03, .089, .09, .089, brass, 14, 8);
+  });
+  for (let i = 0; i < 2; i++) ball(1.32, .31, i * .2 - .23, .06, .064, .06, steel, 12, 7);
+});
+const oilObj = object(() => {
+  let oil = mat('#696048', 2, .9);
+  lathe(0, 0, 0, [[.003, .002], [.82, .002], [.96, .0]], oil, 52, .84);
+  for (let i = 0; i < 7; i++) {
+    let a = rnd() * TAU,
+      d = rnd() * 1.16;
+    ball(cos(a) * d, .003, sin(a) * d, .11 + rnd() * .15, .007, .085, oil, 15, 6);
+  }
+});
+const pitcher = object(() => {
+  let glaze = mat('#d9bb83', 2, .7);
+  lathe(0, 0, 0, [[.01, .01], [.31, .01], [.41, .11], [.46, .45], [.38, .68], [.37, .76], [.32, .76], [.31, .67], [.015, .60]], glaze, 40);
+  lathe(0, 0, 0, [[.37, .19], [.445, .23], [.458, .29]], forest, 40);
+  lathe(0, 0, 0, [[.001, .641], [.341, .641]], mat('#794224', 2, .96), 40);
+  ellipseRing(0, .75, 0, .345, .026, cream);
+  tube([[.36, .57, 0], [.55, .63, 0], [.71, .49, 0], [.72, .31, 0], [.58, .22, 0], [.41, .28, 0]], .058, glaze, 12);
+  group(pose(-.34, .64, 0, 0, 0, .73), () => lathe(0, 0, 0, [[.14, -.08], [.17, .11], [.13, .16], [.095, .14]], glaze, 24, .73));
+});
+const cabbageObj = object(() => {
+  dish(.86, false);
+  ball(0, .49, 0, .72, .53, .62, mat('#b5c67a', 7, .42), 32, 22);
+  for (let j = 0; j < 12; j++) {
+    let az = j * 2.4,
+      layer = j / 12,
+      green = mat(lerp(rgb('#6a904e'), rgb('#d7df9d'), layer * .81), 7, .36);
+    group(pose(0, .11, 0, az), () => {
+      let sample = (u, v) => {
+        let a = (u - .5) * (1.77 - layer * .33),
+          t = .12 + v * (1.68 + layer * .75) + .055 * cos(u * 26 + j) * v,
+          r = .67 + .055 * (1 - layer);
+        return [sin(a) * sin(t) * r, .42 - cos(t) * .43 + v * .08 + .03 * sin(a * 16 + j) * v * v, cos(a) * sin(t) * r + (1 - v) * .03];
+      };
+      grid(15, 10, (u, v) => {
+        let p = sample(u, v);
+        return [p, unit([p[0], p[1] - .4, p[2]]), green];
+      }, green);
+      tube(Array.from({
+        length: 9
+      }, (_, i) => {
+        let p = sample(.5, .08 + i * .11);
+        return [p[0], p[1] + .007, p[2] + .009, .028 * (1 - i / 10)];
+      }), .02, mat('#cbd8a5', 7), 6);
+      for (let s of [-1, 1]) for (let i = 0; i < 3; i++) {
+        let a = .25 + i * .18;
+        tube([sample(.5, a), sample(.5 + s * .18, a + .09), sample(.5 + s * .34, a + .18)], .009, mat('#b9cf8f', 7), 5);
+      }
+    });
+  }
+});
+const knife = object(() => {
+  let blade = [[-.94, .095], [-.98, .17], [-.94, .31], [-.78, .41], [-.56, .44], [.30, .44], [.35, .40], [.34, .11], [.05, .065], [-.65, .055], [-.86, .071]];
+  group(pose(0, 0, 0, 0, PI / 2), () => extrude(blade.map(([x, y]) => [x, -y]), [[-.031, .985], [-.014, 1], [.021, 1], [.032, .989]], mat('#c7cac3', 10, .86)));
+  group(pose(.79, .30, 0, 0, 0, -.035), () => {
+    grid(24, 7, (u, v) => {
+      let t = u * TAU,
+        x = (v - .5) * .96,
+        r = .79 + .21 * sin(PI * v),
+        y = .136 * r * Math.sign(cos(t)) * Math.pow(Math.abs(cos(t)), .67),
+        z = .12 * r * Math.sign(sin(t)) * Math.pow(Math.abs(sin(t)), .67);
+      return [[x, y, z], unit([.17 * (v - .5), cos(t), sin(t)])];
+    }, walnut);
+    ball(.47, 0, 0, .032, .107, .094, walnut, 16, 9);
+    ball(-.47, 0, 0, .025, .106, .094, walnut, 16, 9);
+    tube([[-.45, .107, 0], [-.12, .136, 0], [.2, .13, 0], [.46, .11, 0]], .01, steel, 7);
+    for (let x of [-.26, .29]) ball(x, 0, .111, .031, .031, .012, brass, 14, 8);
+  });
+  box(.34, .3, 0, .14, .29, .243, brass, .038);
+});
+const skin = mat('#e3b18a', 8, .17),
+  blush = mat('#d99b7e', 8, .12),
+  hair = mat('#44372f', 8, .29),
+  hairLight = mat('#584336', 8, .26),
+  eyeMat = mat('#3b342e', 2, .55),
+  linen = mat('#e7dec5', 8, .16),
+  apron = mat('#354f50', 8, .14),
+  sweater = mat('#b9644f', 8, .14),
+  ochre = mat('#d5ac65', 8, .17);
+function stitch(points, m) {
+  tube(points, .011, m, 5);
+}
+function head(k) {
+  let s = k ? .94 : 1.03;
+  group(pose(0, 0, 0, 0, .12, 0, s), () => {
+    ball(0, 0, 0, .37, .44, .33, skin, 32, 22);
+    for (let h of [-1, 1]) {
+      ball(h * .35, -.008, -.004, .078, .108, .063, skin, 16, 10);
+      ball(h * .358, .002, .045, .046, .058, .027, blush, 14, 9);
+    }
+    // A shaped hairline follows the forehead, temples and nape.
+    grid(40, 16, (u, v) => {
+      let a = u * TAU,
+        edge = 1.90 - .65 * sin(a) + .06 * sin(a * 5),
+        b = v * edge;
+      let n = [cos(a) * sin(b), cos(b), sin(a) * sin(b)];
+      return [[n[0] * .385, n[1] * .456 + .018, n[2] * .35 - .014], n];
+    }, hair);
+    grid(32, 10, (u, v) => {
+      let a = -.18 + u * 3.48,
+        side = sin(a),
+        bang = k ? 1.30 + .075 * cos(u * 24.) + .11 * sin(u * 5.) : 1.12 + .38 * sin(PI * u) + .13 * cos(u * 7.);
+      let t = .36 + v * (bang - .36),
+        n = [cos(a) * sin(t), cos(t), sin(a) * sin(t)],
+        r = .012 * sin(u * 15. + v * 3.);
+      return [[n[0] * (.391 + r), n[1] * .46 + .016, n[2] * (.365 + r) - .007], n];
+    }, hair);
+    for (let i = 0; i < 8; i++) {
+      let a = .22 + i * .34,
+        path = [];
+      for (let j = 0; j < 7; j++) {
+        let t = .45 + j * .125,
+          az = a + (k ? .075 : -.28) * j / 6;
+        path.push([cos(az) * sin(t) * .396, cos(t) * .468 + .015, sin(az) * sin(t) * .365 - .005]);
+      }
+      tube(path, .0038, hairLight, 5);
+    }
+    for (let h of [-1, 1]) {
+      let x = h * .153;
+      tube([[x - .066, .062, .298], [x, .086, .318], [x + .061, .064, .297]], .014, hair, 7);
+      ball(x, -.001, .306, .048, .037, .022, mat('#ece1c8', 2, .38), 16, 9);
+      ball(x + .007, -.008, .324, .028, .032, .012, eyeMat, 16, 9);
+      ball(x - .001, .003, .337, .007, .008, .003, cream, 7, 5);
+      tube([[x - .044, .007, .318], [x, .029, .33], [x + .042, .011, .317]], .007, hairLight, 6);
+    }
+    ball(.003, -.072, .321, .054, .058, .052, skin, 18, 11);
+    tube([[-.074, -.183, .282], [-.026, -.20, .29], [.029, -.201, .29], [.078, -.178, .279]], .012, mat('#a36955'), 8);
+    if (k) {
+      group(pose(-.26, .21, .148, 0, .12, -.25), () => {
+        for (let h of [-1, 1]) group(pose(h * .055, 0, 0, 0, 0, h * .46), () => ball(0, 0, 0, .073, .066, .037, sweater, 16, 9));
+        ball(0, 0, .022, .037, .035, .025, ochre, 12, 7);
+      });
+      for (let h of [-1, 1]) {
+        ball(h * .325, -.047, -.16, .125, .13, .125, hair, 18, 12);
+        for (let q = 0; q < 3; q++) ball(h * (.347 + .014 * sin(q)), -.145 - q * .094, -.19 - .008 * q, .094 - q * .012, .088, .077, hairLight, 14, 10);
+        ball(h * .35, -.322, -.185, .085, .048, .09, sweater, 13, 8);
+        ball(h * .35, -.39, -.185, .048, .068, .053, hair, 12, 9);
+      }
+    } else {
+      for (let h of [-1, 1]) {
+        let pts = [];
+        for (let i = 0; i <= 28; i++) {
+          let a = i * TAU / 28;
+          pts.push([h * .158 + .109 * cos(a), -.005 + .09 * sin(a), .326 - .037 * Math.abs(h * .158 + .109 * cos(a))]);
+        }
+        tube(pts, .0105, walnut, 7);
+        tube([[h * .256, .01, .31], [h * .35, .035, .14], [h * .365, .048, .012]], .0095, walnut, 7);
+      }
+      tube([[-.05, .005, .327], [0, .025, .341], [.05, .005, .327]], .009, walnut, 7);
+      for (let h of [-1, 1]) group(pose(h * .324, .001, .032, 0, 0, h * .10), () => ball(0, 0, 0, .047, .104, .087, hair, 12, 9));
+    }
+  });
+}
+function torso(k) {
+  const trousers = mat(k ? '#8d755e' : '#505952', 8);
+  for (const side of [-1, 1]) {
+    tube([[side * .20, -.41, 0, .18], [side * .20, -.93, .015, .15], [side * .21, -1.41, .02, .115]], .15, trousers, 14);
+    ball(side * .21, -1.42, .075, .13, .083, .19, walnut, 14, 8);
+  }
+  let shirt = k ? sweater : linen,
+    ap = k ? ochre : apron;
+  lathe(0, 0, 0, [[.36, -.7], [.39, -.22], [.43, .01], [.40, .39], [.48, .69], [.43, .82], [.20, .92], [.15, .92]], shirt, 36, .68);
+  lathe(0, .87, 0, [[.149, 0], [.15, .27]], skin, 22, .89);
+  lathe(0, 0, 0, [[.43, -.62], [.443, -.23], [.429, .07], [.414, .29]], ap, 34, .74);
+  grid(16, 8, (u, v) => {
+    let x = (u - .5) * (.79 - v * .24),
+      z = .305 - .14 * (x / .43) ** 2;
+    return [[x, .14 + v * .575, z + .01], unit([x * .75, .05, 1])];
+  }, ap);
+  for (let h of [-1, 1]) tube([[h * .27, .70, .247], [h * .305, .829, .18], [h * .28, .87, -.04], [h * .24, .72, -.25]], .041, ap, 8);
+  box(0, .208, .328, .32, .221, .032, ap, .047);
+  stitch([[-.14, .295, .346], [-.14, .135, .342], [0, .112, .351], [.14, .135, .342], [.14, .295, .346]], k ? linen : mat('#a9ac97'));
+  for (let h of [-1, 1]) ball(h * .233, .64, .272, .029, .029, .014, brass, 12, 7);
+  if (k) {
+    for (let i = 0; i < 5; i++) {
+      let t = i * TAU / 5;
+      ball(.107 + .023 * cos(t), .22 + .023 * sin(t), .353, .019, .019, .009, cream, 9, 6);
+    }
+  } else {
+    for (let h of [-1, 1]) {
+      group(pose(h * .113, .852, .12, 0, .15, h * .38), () => ball(0, 0, 0, .112, .124, .059, linen, 14, 10));
+    }
+  }
+}
+function forearm(k, h) {
+  let shirt = k ? sweater : linen;
+  let pts = [[h * .39, .71, .005, .185], [h * .52, .56, .085, .181], [h * .58, .31, .256, .151], [h * .57, .24, .34, .142], [h * .48, .19, .56, .123]];
+  tube(pts, .15, shirt, 16);
+  ball(h * .42, .667, .018, .183, .195, .177, shirt, 18, 12);
+  tube([[h * .48, .19, .54, .128], [h * .455, .19, .615, .124]], .12, k ? ochre : mat('#d6ceb7', 8), 16);
+  tube([[h * .46, .19, .60, .099], [h * .40, .18, .73, .087], [h * .33, .15, .81, .09]], .088, skin, 12);
+  ball(h * .32, .15, .83, .129, .082, .149, skin, 16, 12);
+  for (let i = 0; i < 4; i++) ball(h * (.235 + .052 * i), .130 + .013 * sin(i), .946 - .018 * Math.abs(i - 1), .031, .039, .083 - i * .005, skin, 10, 7);
+  ball(h * .20, .147, .824, .055, .044, .076, skin, 12, 8);
+}
+const people = [true, false].map(k => ({
+  k,
+  body: object(() => torso(k)),
+  head: object(() => head(k)),
+  arms: [-1, 1].map(h => object(() => forearm(k, h)))
+}));
+const guideSleeve = object(() => lathe(0, 0, 0, [[.155, 0], [.183, .11], [.176, .54], [.142, .96], [.137, 1]], linen, 18));
+const supportingArm = object(() => {
+  lathe(0, 0, 0, [[.144, 0], [.149, .16], [.13, .68], [.123, .79]], linen, 18);
+  lathe(0, 0, 0, [[.129, .74], [.133, .78], [.127, .86], [.105, .87]], mat('#d5cbb0', 8), 18);
+  lathe(0, 0, 0, [[.095, .86], [.086, 1]], skin, 16);
+});
+const guidingHand = object(() => {
+  ball(0, 0, 0, .126, .076, .161, skin, 20, 11);
+  for (let i = 0; i < 4; i++) {
+    let x = -.085 + i * .055,
+      len = i === 0 ? .19 : .119 - i * .008;
+    let path = [[x, .005, .072, .035], [x - .009, .002, .14, .031], [x - .008, -.023, .12 + len, .028], [x - .008, -.032, .13 + len, .019]];
+    tube(path, .03, skin, 9);
+    ball(x - .008, -.032, .13 + len, .019, .019, .019, skin, 9, 6);
+  }
+  group(pose(-.102, -.004, .009, 0, 0, -.55), () => ball(0, 0, 0, .053, .051, .093, skin, 12, 8));
+});
+function limbBetween(a, b, s) {
+  let axis = sub(b, a),
+    up = unit(axis),
+    right = unit(cross(up, Math.abs(up[2]) > .93 ? [0, 1, 0] : [0, 0, 1])),
+    front = cross(right, up);
+  return [...mul(right, s), 0, ...axis, 0, ...mul(front, s), 0, ...a, 1];
+}
+function supportHand(base, demonstrate) {
+  let shoulder = transform(base, [.37, .71, .065]),
+    o = stage.onion,
+    k = vegScale,
+    reach = portrait ? 1.45 : 1.79;
+  let want = add(o, [-.42 * k, .48 * k, -.53 * k]);
+  if (meal || washing || portrait) want = transform(base, [.43, .23, .93]);
+  if (demonstrate) {
+    let t = sin(PI * demoPhase) ** 2;
+    want[0] += .16 * k * t;
+    want[2] += .18 * k * t;
+    want[1] += .08 * k * t;
+  }
+  if (cut) want[1] += .025 * cos(cut.progress * PI);
+  let axis = unit(sub(want, shoulder)),
+    length = Math.min(Math.hypot(...sub(want, shoulder)), reach);
+  let wrist = add(shoulder, mul(axis, length)),
+    perp = unit(sub([1, -.55, 0], mul(axis, dot(axis, [1, -.55, 0])))),
+    elbow = add(lerp(shoulder, wrist, .50), mul(perp, Math.sqrt(Math.max(.024, (reach * .50) ** 2 - (length * .50) ** 2))));
+  guideSleeve.model = limbBetween(shoulder, elbow, k * 1.07);
+  supportingArm.model = limbBetween(elbow, wrist, k * 1.07);
+  guidingHand.model = pose(...wrist, -.17, .15, 0, k * 1.09);
+}
+const hints = object(() => {
+  // A small pool of reflected amber light belongs to just one object.
+  for (let i = 0; i < 4; i++) {
+    let a = i * PI / 2 + .3;
+    let pts = [];
+    for (let j = 0; j < 10; j++) {
+      let t = a + j * .060;
+      pts.push([cos(t), .012, sin(t)]);
+    }
+    tube(pts, .014, mat('#efd29a', 2, .78), 6);
+  }
+});
+const ginger = object(() => {
+  dish(.54);
+  let gingerMat = mat('#bf9a60', 8, .3);
+  for (let p of [[-.1, .27, .04, .27, .15, .15], [.13, .23, .02, .17, .11, .12], [-.15, .26, -.10, .119, .105, .19], [-.21, .23, .11, .121, .1, .17]]) ball(...p, gingerMat, 18, 11);
+  for (let i = 0; i < 3; i++) ball(.14 + i * .045, .19 + i * .015, .21, .106, .017, .085, mat('#e4ce8a', 8), 16, 7);
+});
+const chopsticks = object(() => {
+  box(0, .066, 0, .55, .132, .18, cream, .06);
+  for (let h of [-1, 1]) tube([[h * .082, .077, 1.02, .022], [h * .1, .142, .11, .033], [h * .116, .174, -.64, .042]], .033, walnut, 12);
+});
+const rack = object(() => {
+  box(0, 0, 0, 1.5, .12, .6, wood, .08);
+  for (let x of [-.53, -.25, .05, .35, .62]) for (let z of [-.20, .20]) tube([[x, .05, z], [x + .06, .39, z]], .036, maple, 9);
+});
+const scraps = object(() => {
+  let husk = mat('#b77b3f', 8, .32);
+  for (let j = 0; j < 3; j++) group(pose(j * .11, 0, j * .08, j * 2), () => grid(12, 4, (u, v) => {
+    let h = .08 * sin(PI * u) * cos(v * 3) + v * .04;
+    return [[(u - .5) * (.34 + .1 * j), h + .06, (v - .5) * .15 * sin(PI * u)], unit([.15, 1, sin(v * 3) * .5])];
+  }, husk));
+});
+const washThings = ['plate', 'board', 'knife'];
+let washAmount = {
+    plate: 0,
+    board: 0,
+    knife: 0
+  },
+  washCurrent = null,
+  mealTime = 0,
+  bites = 0,
+  sauceTilt = 0,
+  sauceFlow = 0,
+  wet = 0,
+  actionMotion = 0,
+  knifeMotion = 0,
+  disturb = 0,
+  guideTarget = '',
+  demoPhase = 0,
+  knifeTarget = [0, 0, 0],
+  knifePos = [0, 0, 0],
+  knifeYaw = -.48,
+  knifeRoll = 0;
+let highlight = [0, 0, 0, 1],
+  safe = [0, 0, 0, 0],
+  eye = [0, 7.5, 10.2],
+  look = [0, .7, -.62],
+  vp = identity(),
+  aspect = 1,
+  hfov = .61,
+  W = 0,
+  H = 0,
+  dpr = 1,
+  camRight,
+  camUp,
+  camDir;
+function setLayout() {
+  let old = Object.fromEntries(Object.entries(stage).map(([k, v]) => [k, v.slice()]));
+  Object.assign(stage, Object.fromEntries(Object.entries(locations0).map(([k, v]) => [k, v.slice()])));
+  if (portrait) {
+    Object.assign(stage, {
+      board: [-.22, .22, 1.22],
+      onion: [-.38, .22, 1.10],
+      pan: [.80, .44, -1.66],
+      plate: [.82, .18, 3.07],
+      cabbage: [-1.48, .10, -.40],
+      sauce: [-1.16, 0, -2.18],
+      sink: [1.54, .06, -3.88],
+      cloth: [-.42, 0, 1.5],
+      tray: [-1.1, .11, 2.81]
+    });
+  }
+  vegScale = portrait ? .75 : 1;
+  let oldScale = changedLayout ? .75 : 1,
+    factor = vegScale / oldScale;
+  for (let f of foods) {
+    let zone = f.zone === 'hand' ? f.from : f.zone,
+      key = stage[zone] ? zone : 'pan';
+    const src = old[key],
+      dst = stage[key];
+    f.x = dst[0] + (f.x - src[0]) * factor;
+    f.tx = dst[0] + (f.tx - src[0]) * factor;
+    f.z = dst[2] + (f.z - src[2]) * factor;
+    f.tz = dst[2] + (f.tz - src[2]) * factor;
+    if (factor !== 1) {
+      f.len *= factor;
+      f.width *= factor;
+      if (f.cutScale) f.cutScale *= factor;
+      f.rest *= factor;
+      f.support *= factor;
+      for (let node of f.nodes) node.y *= factor;
+      f.lastMesh = -1;
+    }
+  }
+  for (let pool of pools) {
+    pool.x = stage.plate[0] + (pool.x - old.plate[0]) * factor;
+    pool.z = stage.plate[2] + (pool.z - old.plate[2]) * factor;
+    pool.obj.model[12] = pool.x;
+    pool.obj.model[14] = pool.z;
+  }
+  changedLayout = portrait;
+  function put(o, key, angle = 0, s = 1, dy = 0) {
+    let p = stage[key];
+    o.model = pose(p[0], p[1] + dy, p[2], angle, 0, 0, s);
+  }
+  put(boardObj, 'board', -.075, portrait ? .78 : 1, -stage.board[1]);
+  put(meatTray, 'tray', portrait ? -.21 : -.66, portrait ? .62 : .78, -.11);
+  put(plateObj, 'plate', 0, portrait ? .77 : 1, -.17);
+  put(panObj, 'pan', .04, portrait ? .78 : 1);
+  put(oilObj, 'pan', 0, portrait ? .78 : 1, .069 * (portrait ? .78 : 1));
+  put(cabbageObj, 'cabbage', -.25, portrait ? .76 : 1, -.09);
+  put(pitcher, 'sauce', -.2, portrait ? .82 : 1);
+  put(towel, 'cloth', -.22, portrait ? .83 : 1);
+  put(sinkObj, 'sink', 0, portrait ? .71 : 1);
+  ginger.model = portrait ? pose(-1.86, .013, -1.71, .19, 0, 0, .47) : pose(-3.76, .014, 1.16, -.18, 0, 0, .87);
+  chopsticks.model = portrait ? pose(-.9, .006, 3.42, .52, 0, 0, .72) : pose(2.83, .02, 3.44, 1.48, 0, 0, .94);
+  rack.model = pose(stage.sink[0] + (portrait ? -.93 : 1.29), .1, stage.sink[2] + .04, .08, 0, 0, portrait ? .63 : .91);
+  scraps.model = pose(stage.onion[0] - .85 * vegScale, stage.board[1], stage.onion[2] + .53 * vegScale, .14);
+  bodyPose = pose(...stage.onion, 0, 0, 0, vegScale);
+  bodyObj.model = bodyPose;
+  knifePos = add(stage.onion, [.67 * vegScale, .20 * vegScale, .42 * vegScale]);
+}
+function camera(dt, immediate = false) {
+  let compact = portrait;
+  let target = compact ? [0, .64, -.31] : [0, .70, -.64];
+  let defEye = compact ? [.52, 7.12, 10.06] : [1.00, 5.63, 10.20];
+  let f = compact ? 2 * Math.atan(Math.tan(.39 / 2) / aspect) : Math.max(.59, 2 * Math.atan(Math.tan(.84 / 2) / aspect));
+  let amount = follow;
+  let plate = stage.plate,
+    lowTarget = [plate[0] * .78, .48, plate[2] - .55],
+    lowEye = [plate[0] + (compact ? .78 : 1.14), compact ? 2.10 : 1.72, plate[2] + (compact ? 7.6 : 6.8)];
+  if (grip?.f?.type === 'meat' && firstServed && grip.f.zone === 'hand') {
+    lowTarget[0] = mix(lowTarget[0], grip.f.x, .43);
+    lowTarget[2] = mix(lowTarget[2], grip.f.z, .43);
+  }
+  if (clean) {
+    let r = objectPoint(rack);
+    target = add(r, [.12, .63, 0]);
+    defEye = add(target, compact ? [3.18, 2.36, 3.39] : [2.23, 1.99, 4.59]);
+    amount = 0;
+  } else if (washing) {
+    target = lerp(target, stage.sink, .48);
+    defEye = add(target, compact ? [.45, 6.7, 9.2] : [.9, 5.1, 8.3]);
+    amount = 0;
+  }
+  let k = immediate ? 1 : 1 - Math.exp(-dt * 2.4);
+  eye = lerp(eye, lerp(defEye, lowEye, amount), k);
+  look = lerp(look, lerp(target, lowTarget, amount), k);
+  hfov = f;
+  camDir = unit(sub(look, eye));
+  camRight = unit(cross(camDir, [0, 1, 0]));
+  camUp = cross(camRight, camDir);
+  vp = mm(perspective(f, aspect, .08, 70), view(eye, look));
+}
+function screen(p) {
+  let a = transform(vp, p),
+    w = vp[3] * p[0] + vp[7] * p[1] + vp[11] * p[2] + vp[15];
+  return [(a[0] / w * .5 + .5) * W, (.5 - a[1] / w * .5) * H];
+}
+function ground(x, y, h) {
+  let k = Math.tan(hfov / 2),
+    r = add(camDir, add(mul(camRight, (2 * x / W - 1) * aspect * k), mul(camUp, (1 - 2 * y / H) * k)));
+  let t = (h - eye[1]) / Math.min(-.04, r[1]);
+  return add(eye, mul(r, t));
+}
+function resize() {
+  let w = canvas.clientWidth,
+    h = canvas.clientHeight;
+  if (w === W && h === H) return;
+  let cs = getComputedStyle(document.querySelector('#inset'));
+  safe = ['paddingLeft', 'paddingTop', 'paddingRight', 'paddingBottom'].map(k => parseFloat(cs[k]) || 0);
+  W = w;
+  H = h;
+  aspect = w / h;
+  dpr = Math.min(devicePixelRatio || 1, 1.65, Math.sqrt(1360000 / (w * h)));
+  canvas.width = Math.round(w * dpr);
+  canvas.height = Math.round(h * dpr);
+  portrait = aspect < .86;
+  endGesture(true);
+  setLayout();
+  camera(1, true);
+}
+let audioCtx = null,
+  noiseBuffer = null,
+  sizzle = null,
+  sizzleGain = null,
+  soundClock = 0;
+function audioStart() {
+  try {
+    if (!audioCtx) {
+      let A = window.AudioContext || window.webkitAudioContext;
+      if (!A) return;
+      audioCtx = new A();
+      noiseBuffer = audioCtx.createBuffer(1, audioCtx.sampleRate, audioCtx.sampleRate);
+      let a = noiseBuffer.getChannelData(0);
+      for (let i = 0; i < a.length; i++) a[i] = Math.random() * 2 - 1;
+      sizzle = audioCtx.createBufferSource();
+      sizzle.buffer = noiseBuffer;
+      sizzle.loop = true;
+      let filter = audioCtx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.value = 2300;
+      filter.Q.value = .65;
+      sizzleGain = audioCtx.createGain();
+      sizzleGain.gain.value = 0;
+      sizzle.connect(filter).connect(sizzleGain).connect(audioCtx.destination);
+      sizzle.start();
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+  } catch (_) {}
+}
+function sound(kind, power = .5, width = .2) {
+  if (!audioCtx || audioCtx.state === 'closed') return;
+  let t = audioCtx.currentTime,
+    noise = kind === 'cut' || kind === 'leaf' || kind === 'wash',
+    src = noise ? audioCtx.createBufferSource() : audioCtx.createOscillator(),
+    g = audioCtx.createGain(),
+    filter = audioCtx.createBiquadFilter(),
+    d = {
+      cut: .10,
+      leaf: .13,
+      wash: .14,
+      board: .11,
+      plate: .23,
+      water: .12,
+      lift: .07
+    }[kind] || .12;
+  let f = {
+    cut: 1650,
+    leaf: 2800,
+    wash: 1300,
+    board: 230,
+    plate: 870,
+    water: 1020,
+    lift: 340
+  }[kind] || 280;
+  if (noise) {
+    src.buffer = noiseBuffer;
+    filter.type = 'bandpass';
+    filter.frequency.value = f * (.82 + power * .28);
+    filter.Q.value = .85;
+  } else {
+    src.type = kind === 'board' ? 'triangle' : 'sine';
+    src.frequency.setValueAtTime(f * (1.10 - width * .65), t);
+    src.frequency.exponentialRampToValueAtTime(f * (kind === 'water' ? .68 : .56), t + d);
+  }
+  g.gain.setValueAtTime(.0001, t);
+  g.gain.exponentialRampToValueAtTime((noise ? .13 : .1) * clamp(power, .1, 1), t + .006);
+  g.gain.exponentialRampToValueAtTime(.0001, t + d);
+  src.connect(filter);
+  filter.connect(g).connect(audioCtx.destination);
+  src.start();
+  src.stop(t + d + .012);
+  src.onended = () => {
+    src.disconnect();
+    filter.disconnect();
+    g.disconnect();
+  };
+}
+function surfaceY(zone) {
+  return zone === 'tray' ? stage.tray[1] : zone === 'pan' ? stage.pan[1] + .075 * (portrait ? .78 : 1) : zone === 'plate' ? stage.plate[1] - .17 + .091 * (portrait ? .77 : 1) : stage.board[1];
+}
+function scalePan() {
+  return portrait ? .78 : 1;
+}
+function scalePlate() {
+  return portrait ? .77 : 1;
+}
+function newMeats() {
+  let p = stage.pan,
+    q = scalePan();
+  for (let j = 0; j < 2; j++) {
+    let f = food('meat', p[0] + (j ? .13 : -.19) * q, p[2] + (j ? .41 : -.39) * q, (j ? 1.88 : 1.75) * q, .77 * q, (j ? .24 : -.22) + (Math.random() - .5) * .15, 'pan');
+    f.y = surfaceY('pan') + .07;
+    if (j) {
+      moveZone(f, 'tray');
+      f.history = ['tray'];
+      f.len *= .86;
+      f.width *= .90;
+      f.x = f.tx = stage.tray[0];
+      f.z = f.tz = stage.tray[2];
+      f.angle = portrait ? -.21 : -.66;
+      f.y = surfaceY('tray') + .13;
+    }
+    for (let n of f.nodes) n.y = .07;
+    meatData(f);
+  }
+}
+function posOn(f, d, lateral = 0) {
+  return [f.x + d * cos(f.angle) + lateral * sin(f.angle), 0, f.z - d * sin(f.angle) + lateral * cos(f.angle)];
+}
+function localTo(f, x, z) {
+  let dx = x - f.x,
+    dz = z - f.z;
+  return [dx * cos(f.angle) - dz * sin(f.angle), dx * sin(f.angle) + dz * cos(f.angle)];
+}
+function footprint(f, x, z) {
+  let [u, v] = localTo(f, x, z);
+  if (f.type === 'onion') {
+    let d = f.cutNormal,
+      a = (x - f.x) * d[0] + (z - f.z) * d[2],
+      b = (x - f.x) * d[2] - (z - f.z) * d[0];
+    return Math.exp(-((a / (.36 * f.cutScale + .1)) ** 2 + (b / (f.len * .46 + .05)) ** 2) * 2);
+  }
+  return Math.max(0, 1 - (u / (f.len * .56)) ** 4 - (v / (f.width * .68 + .055)) ** 2);
+}
+function leafTop(f, x, z) {
+  let [u, v] = localTo(f, x, z),
+    w = footprint(f, x, z);
+  return w > .015 ? Math.max(0, f.y - surfaceY('plate') + .028 - f.support + (f.rest + f.support) * cos(clamp(u / f.len, -.5, .5) * PI) + .025 * sin(u * 9 + f.seed)) : 0;
+}
+function supportAt(f, x, z) {
+  let height = 0;
+  for (let s of foods) {
+    if (s === f || s.zone !== f.zone || s.consumed >= 1) continue;
+    if (s.type === 'onion' && !s.stack) {
+      height = Math.max(height, footprint(s, x, z) * (s.width * .72 + .065) * (1 - s.soft * .22));
+    } else if (s.type === 'cabbage' && f.zone === 'plate') {
+      let h = leafTop(s, x, z);
+      height = Math.max(height, h);
+      if (h > .03) s.load = Math.max(s.load, footprint(s, x, z));
+    }
+  }
+  return height;
+}
+function settleLeaves(f, dt) {
+  let floor = surfaceY(f.zone),
+    support = 0,
+    compression = f.load;
+  f.load = 0;
+  if (f.zone === 'plate') {
+    for (let s of foods) {
+      if (s === f || s.type !== 'cabbage' || s.zone !== 'plate' || s.order >= f.order) continue;
+      let [u, v] = localTo(s, f.x, f.z);
+      if (Math.abs(u) < (s.len + f.len) * .46 && Math.abs(v) < .12 + f.len * .35 * Math.abs(sin(f.angle - s.angle))) {
+        let crossAngle = Math.abs(sin(f.angle - s.angle)),
+          reach = Math.max(0, 1 - Math.hypot(f.x - s.x, f.z - s.z) / (f.len * .68 + s.width));
+        support = Math.max(support, (s.y - floor + .025 + s.rest * (.25 + .65 * crossAngle)) * reach);
+      }
+    }
+  }
+  f.compression = mix(f.compression, compression, 1 - Math.exp(-dt * 4));
+  f.support = mix(f.support, support * (1 - .27 * f.compression), 1 - Math.exp(-dt * 5));
+  let arch = (.042 + .16 * f.len ** 1.5) * (1 - .48 * f.compression);
+  f.rest = mix(f.rest, arch, 1 - Math.exp(-dt * 5));
+  return floor + .027 + support * (1 - .27 * f.compression);
+}
+// Each longitudinal sample carries two browned faces and its own mobile sauce reservoir.
+function updateMeat(f, dt) {
+  let pan = f.zone === 'pan',
+    held = f.zone === 'hand',
+    base = held ? surfaceY(f.from) : surfaceY(f.zone),
+    N = f.nodes.length - 1,
+    heat = 0,
+    brown = 0,
+    sauce = 0;
+  let heights = f.nodes.map(n => n.y),
+    flowDelta = new Float32Array(N + 1);
+  for (let i = 0; i <= N; i++) {
+    let n = f.nodes[i],
+      u = i / N,
+      p = posOn(f, (u - .5) * f.len),
+      support = held ? 0 : supportAt(f, p[0], p[2]);
+    if (!held) {
+      for (let side of [-.34, .34]) {
+        let rim = posOn(f, (u - .5) * f.len, side * f.width);
+        support = Math.max(support, .94 * supportAt(f, rim[0], rim[2]));
+      }
+    }
+    let floor = support + .061;
+    let smooth = (heights[Math.max(0, i - 1)] + heights[Math.min(N, i + 1)]) / 2;
+    let goal = floor + (f.zone === 'tray' ? .07 + .11 * (.5 + .5 * sin(u * TAU * 2.5)) : 0) + (f.propped ? .48 * (1 - .9 * Math.abs(u - f.gripAt)) : 0);
+    if (held) {
+      let dist = Math.abs(u - f.gripAt);
+      goal = Math.max(.075, f.holdHeight - .92 * dist ** 1.15 * (1 + n.sauce * .27));
+    }
+    let force = (goal - n.y) * (held ? 65 : i === 0 || i === N ? 31 : 46) + (smooth - n.y) * 100;
+    n.vy += (force - n.vy * 9.5) * dt;
+    n.y += n.vy * dt;
+    if (!held && n.y < floor - .01) {
+      n.y = floor - .01;
+      n.vy = Math.max(n.vy, 0);
+    }
+    n.contact = pan ? clamp(1 - (n.y - .061) / .096, 0, 1) : 0;
+    n.heat = clamp(n.heat + dt * (pan && burner ? (.009 + .046 * n.contact) * (1 - n.heat) : -.003 * n.heat), 0, 1);
+    let face = n.face[f.side];
+    if (pan && burner) n.face[f.side] = clamp(face + dt * n.contact * Math.max(0, n.heat - .13) * (.032 + n.sauce * .019) * (1 - face), 0, 1);
+    let left = i > 0 ? heights[i - 1] : heights[i],
+      right = i < N ? heights[i + 1] : heights[i];
+    if (n.sauce > .001) {
+      for (let [j, h] of [[i - 1, left], [i + 1, right]]) if (j >= 0 && j <= N && h < heights[i]) {
+        let d = Math.min(n.sauce * .40, dt * (heights[i] - h) * n.sauce * 3.4);
+        flowDelta[i] -= d;
+        flowDelta[j] += d;
+      }
+      if ((i === 0 || i === N) && n.y < .17 && n.sauce > .32 && f.zone === 'plate') {
+        let d = dt * Math.min(.33, n.sauce * .19);
+        flowDelta[i] -= d;
+        addPool(p[0], p[2], d, f.id);
+      }
+    }
+    heat += n.heat;
+    brown += n.face[f.side];
+    sauce += n.sauce;
+  }
+  for (let i = 0; i <= N; i++) f.nodes[i].sauce = clamp(f.nodes[i].sauce + flowDelta[i], 0, 4);
+  f.heat = heat / (N + 1);
+  f.brown = brown / (N + 1);
+  f.sauce = sauce / (N + 1);
+  f.y = base + f.nodes[N >> 1].y;
+  f.flip = mix(f.flip, f.turn, 1 - Math.exp(-dt * 4.4));
+  f.obj.model = pose(f.x, base + (f.mealLift || 0), f.z, f.angle, 0, 0, f.scale);
+  if (now - f.lastMesh > .055 || held) {
+    meatData(f);
+    f.lastMesh = now;
+  }
+}
+const pools = [];
+function addPool(x, z, amount, id) {
+  let plate = stage.plate,
+    dx = x - plate[0],
+    dz = z - plate[2],
+    dist = Math.hypot(dx, dz),
+    limit = 1.02 * scalePlate();
+  if (dist > limit) {
+    x = plate[0] + dx * limit / dist;
+    z = plate[2] + dz * limit / dist;
+  }
+  let p = pools.find(p => p.id === id && Math.hypot(p.x - x, p.z - z) < .22);
+  if (!p) {
+    if (pools.length >= 12) return;
+    p = {
+      id,
+      x,
+      z,
+      v: 0,
+      obj: object(() => ball(0, 0, 0, 1, .065, .68, mat('#985525', 2, .93), 18, 7))
+    };
+    pools.push(p);
+  }
+  p.v += amount;
+  let r = .035 + Math.min(.31, Math.sqrt(p.v) * .13);
+  p.obj.model = pose(p.x, surfaceY('plate') + .009, p.z, 0, 0, 0, r);
+}
+function advanceFoods(dt) {
+  for (let f of foods) {
+    if (f.consumed >= 1 || clean && !f.obj.visible) continue;
+    f.age += dt;
+    let held = f.zone === 'hand',
+      k = 1 - Math.exp(-dt * (held ? 30 : 13));
+    f.x = mix(f.x, f.tx, k);
+    f.z = mix(f.z, f.tz, k);
+    if (f.eating) {
+      const diner = people[f.diner || 0],
+        mouth = transform(diner.head.model, [0, -.18, .31]);
+      const t = clamp(f.consumed * 1.65, 0, 1),
+        ease = t * t * (3 - 2 * t);
+      f.x = mix(f.eatStart[0], mouth[0], ease);
+      f.z = mix(f.eatStart[2], mouth[2], ease);
+      f.mealLift = (mouth[1] - f.eatStart[1]) * ease + .24 * sin(PI * t);
+      let stick = lerp(f.eatStart, mouth, ease);
+      chopsticks.model = pose(stick[0] + .34, stick[1] + f.mealLift * (1 - ease) + .13, stick[2], 1.17, 0, -.19, vegScale * .72);
+      f.consumed = Math.min(1, f.consumed + dt * .9);
+      f.scale = Math.max(.015, 1 - Math.max(0, (f.consumed - .48) / .52));
+      if (f.consumed === 1) {
+        f.obj.visible = false;
+        continue;
+      }
+    }
+    if (f.type === 'meat') {
+      updateMeat(f, dt);
+      continue;
+    }
+    let target = 0;
+    if (f.type === 'cabbage') {
+      if (held) f.support *= Math.exp(-dt * 7);
+      if (f.angleGoal !== undefined) f.angle = mix(f.angle, f.angleGoal, 1 - Math.exp(-dt * 6));
+      target = held ? f.holdHeight + surfaceY(f.from) : settleLeaves(f, dt);
+      f.curl = mix(f.curl, held ? -.65 : 0, 1 - Math.exp(-dt * 5));
+      if (now - f.lastMesh > .09) {
+        cabbageData(f);
+        f.lastMesh = now;
+      }
+    } else {
+      if (f.zone === 'pan' && burner) {
+        let rate = .027 / (.14 + f.width * 2.8);
+        f.heat += (1 - f.heat) * rate * dt;
+        f.soft = clamp((f.heat - .1) / .72, 0, 1);
+        f.brown = clamp(f.brown + dt * Math.max(0, f.heat - .31) * .084, 0, 1);
+      }
+      f.obj.opacity = 1 - .42 * f.soft;
+      f.obj.browning = f.brown;
+      let goalTilt = held ? 1.02 + f.soft * .3 : clamp(1.73 - f.width * 2.45 + f.soft * .48, .49, 1.55);
+      f.spin += (goalTilt - f.tilt) * 26 * dt;
+      f.spin *= Math.exp(-dt * 5);
+      f.tilt += f.spin * dt;
+      f.curl = mix(f.curl, held ? (.32 + f.soft * .74) / (.43 + f.width * 2.1) : f.soft * .15, 1 - Math.exp(-dt * 4));
+      let restY = f.width * .47 + Math.abs(cos(f.tilt)) * .48 * f.cutScale;
+      target = held ? surfaceY(f.from) + f.holdHeight : surfaceY(f.zone) + restY;
+      if (f.stack) {
+        let meat = foods.find(v => v.id === f.stack && v.zone === f.zone);
+        if (meat) target += meat.nodes[6].y + .072;else f.stack = false;
+      }
+      if (now - f.lastMesh > .065 || held) {
+        sliceData(f);
+        f.lastMesh = now;
+      }
+    }
+    f.vy += ((target - f.y) * (held ? 90 : 64) - f.vy * (held ? 14 : 8)) * dt;
+    f.y += f.vy * dt;
+    if (!held && f.y < target - .04) {
+      f.y = target - .04;
+      f.vy = Math.abs(f.vy) * .21;
+    }
+    f.obj.model = pose(f.x, f.y + (f.mealLift || 0), f.z, f.type === 'cabbage' ? f.angle : 0, 0, 0, f.scale);
+  }
+}
+let order = 0,
+  cabbageCuts = 0,
+  cabbageNotch = 0;
+function cutLeaf(c) {
+  const len = clamp(c.distance * .95, .42, 1.93) * vegScale,
+    width = (.10 + .065 * clamp(1 - c.distance / 2, 0, 1)) * vegScale;
+  let f = food('cabbage', stage.cabbage[0] + .39 * vegScale, stage.cabbage[2] + .27 * vegScale, len, width, -c.angle, 'board');
+  f.rest = .11 * len;
+  f.cutAngle = c.angle;
+  f.cutWidth = width;
+  f.order = ++order;
+  f.y = .57 * vegScale;
+  f.vy = .21;
+  f.tx = stage.board[0] - .72 * vegScale;
+  f.tz = stage.board[2] - .29 * vegScale + (cabbageCuts % 3 - 1) * .17;
+  f.angle = -c.angle;
+  cabbageCuts++;
+  cabbageNotch = Math.min(.28, cabbageNotch + .032);
+  cabbageData(f);
+  sound('leaf', .8);
+  return f;
+}
+const effects = [];
+let fxMesh = object(() => {});
+fxMesh.opacity = .63;
+fxMesh.casts = false;
+function particle(kind, x, y, z, vx, vy, vz, life, r) {
+  if (effects.length >= 42) return;
+  effects.push({
+    kind,
+    x,
+    y,
+    z,
+    vx,
+    vy,
+    vz,
+    life,
+    max: life,
+    r
+  });
+}
+let nextBubble = 0,
+  nextSteam = 0,
+  nextDrip = 0;
+function effectsStep(dt) {
+  let p = stage.pan,
+    s = scalePan(),
+    hot = !washing && !meal && !clean && foods.some(f => f.zone === 'pan');
+  nextBubble -= dt;
+  nextSteam -= dt;
+  nextDrip -= dt;
+  if (hot && nextBubble <= 0) {
+    nextBubble = .16 + rnd() * .21;
+    let m = foods.find(f => f.zone === 'pan' && f.type === 'meat'),
+      q = m ? posOn(m, (rnd() - .5) * m.len, m.width * (rnd() < .5 ? -.49 : .49)) : [p[0] + (rnd() - .5) * 1.3, 0, p[2] + (rnd() - .5) * 1.3];
+    particle('oil', q[0], surfaceY('pan') + .018, q[2], 0, .008, 0, .45, .017 + rnd() * .021);
+  }
+  if (hot && nextSteam <= 0) {
+    nextSteam = .46 + rnd() * .6;
+    particle('steam', p[0] + (rnd() - .5) * 1.5 * s, p[1] + .18, p[2] + (rnd() - .5) * .8, .09, .35, 0, 1.9, .009);
+  }
+  if ((washing || clean) && wet > .02 && nextDrip <= 0) {
+    nextDrip = clean ? .9 : .12;
+    let origin = clean ? transform(knife.model, [-.92, .10, 0]) : [stage.sink[0] + .51 * (portrait ? .71 : 1), stage.sink[1] + .72 * scalePan(), stage.sink[2] + .14];
+    particle('water', ...origin, 0, -.45, 0, .5, .035);
+    if (clean || washCurrent) sound('water', .13);
+  }
+  let old = mesh;
+  mesh = new Mesh();
+  for (let i = effects.length - 1; i >= 0; i--) {
+    let e = effects[i];
+    e.life -= dt;
+    if (e.life <= 0) {
+      effects.splice(i, 1);
+      continue;
+    }
+    e.x += e.vx * dt;
+    e.y += e.vy * dt;
+    e.z += e.vz * dt;
+    let k = 1 - e.life / e.max,
+      r = e.r * Math.max(.03, sin(PI * k));
+    if (e.kind === 'steam') {
+      let pts = [];
+      for (let j = 0; j < 6; j++) pts.push([e.x + .042 * sin(now * 2 + k * 3 + j * .69), e.y + j * .057, e.z + .027 * cos(j * .72 + k), r * (1 - j * .13)]);
+      tube(pts, r, mat('#c6c5ac', 2, .13), 5);
+    } else {
+      if (e.kind === 'water' || e.kind === 'juice') e.vy -= 3.9 * dt;
+      let m = e.kind === 'juice' ? mat('#a76321', 2, .94) : e.kind === 'fiber' ? cream : e.kind === 'foam' ? porcelain : mat(e.kind === 'oil' ? '#bda878' : '#bad1c5', 2, .86);
+      ball(e.x, e.y, e.z, r, r * (e.kind === 'water' ? 1.4 : .76), r, m, 8, 5);
+    }
+  }
+  upload(fxMesh, mesh.data);
+  mesh = old;
+}
+function pour(x, z, dt) {
+  burner = true;
+  let p = stage.pan,
+    d = 0;
+  for (let f of foods) {
+    if (f.zone !== 'pan') continue;
+    if (f.type === 'meat') {
+      for (let i = 0; i < f.nodes.length; i++) {
+        let q = posOn(f, (i / 12 - .5) * f.len),
+          w = Math.exp(-((q[0] - x) ** 2 + (q[2] - z) ** 2) / .52);
+        f.nodes[i].sauce = clamp(f.nodes[i].sauce + w * dt * 1.45, 0, 2.8);
+        d += w;
+      }
+    } else f.sauce = clamp(f.sauce + dt * .6, 0, 1);
+  }
+  return d;
+}
+let activeId = null,
+  press = null,
+  propped = null,
+  serveClock = 0,
+  mealClock = 0,
+  finishedMeal = false,
+  stow = 0,
+  panFlash = 0,
+  wetTarget = null;
+function nearPoint(x, y, p, r, squash = .8) {
+  let a = screen(p),
+    b = screen(add(p, mul(camRight, r))),
+    margin = Math.min(14, W * .026),
+    rx = Math.max(21, Math.abs(b[0] - a[0]) + margin),
+    ry = Math.max(21, rx * squash);
+  return ((x - a[0]) / rx) ** 2 + ((y - a[1]) / ry) ** 2;
+}
+function objectPoint(o) {
+  return [o.model[12], o.model[13], o.model[14]];
+}
+function foodHit(f, x, y) {
+  let h = f.type === 'meat' ? surfaceY(f.zone) + f.nodes[6].y : f.y;
+  let p = ground(x, y, h),
+    [u, v] = localTo(f, p[0], p[2]);
+  if (f.type === 'onion') return nearPoint(x, y, [f.x, f.y, f.z], Math.max(.20, Math.min(.49, f.len * .39)), .82);
+  let margin = clamp(26 / W * (portrait ? 4 : 9), .13, .36);
+  return (u / (f.len * .52 + margin)) ** 2 + (v / (f.width * .50 + margin)) ** 2;
+}
+// A single captured pointer selects projected objects and intersects the current work surface.
+function targetAt(x, y) {
+  if (clean) return nearPoint(x, y, objectPoint(boardObj), .8, 1) < 1.9 || nearPoint(x, y, objectPoint(knife), .74, 1) < 1.8 ? 'restart' : null;
+  if (washing) {
+    if (nearPoint(x, y, stage.sink, .9) < 1 && wetTarget) return wetTarget;
+    let opts = washThings.filter(k => washAmount[k] < 1).map(k => [k, nearPoint(x, y, objectPoint({
+      board: boardObj,
+      plate: plateObj,
+      knife
+    }[k]), k === 'board' ? 1.55 : k === 'plate' ? .96 : .73)]);
+    opts.sort((a, b) => a[1] - b[1]);
+    return opts[0]?.[1] <= 1 ? opts[0][0] : null;
+  }
+  if (!washing && !meal && foods.some(f => f.zone === 'plate' && f.type === 'meat') && nearPoint(x, y, objectPoint(chopsticks), .31, .95) < 1) return 'eat';
+  if (meal) return nearPoint(x, y, stage.plate, 1.35) < 1.2 || nearPoint(x, y, objectPoint(chopsticks), .83) < 1 ? 'eat' : null;
+  let hits = foods.filter(f => f.consumed < 1 && f.zone !== 'hand').map(f => [f, foodHit(f, x, y)]).filter(q => q[1] <= 1);
+  hits.sort((a, b) => a[1] - b[1]);
+  let onion = nearPoint(x, y, add(stage.onion, [0, .53 * vegScale, 0]), .84 * vegScale, .86),
+    blade = nearPoint(x, y, knifePos, .92 * vegScale, .49),
+    cabb = nearPoint(x, y, add(stage.cabbage, [0, .39 * vegScale, 0]), .73 * vegScale, .81);
+  if (hits.length && hits[0][1] < .88) return hits[0][0];
+  if (onion < 1 || blade < 1) return 'onion';
+  if (cabb < 1) return 'cabbage';
+  if (nearPoint(x, y, add(stage.sauce, [0, .42, 0]), .45 * vegScale, 1) < 1) return 'sauce';
+  if (foods.some(f => f.zone === 'plate' && f.type === 'meat') && nearPoint(x, y, objectPoint(chopsticks), .61, .98) < 1) return 'eat';
+  if (hits.length) return hits[0][0];
+  if (nearPoint(x, y, stage.pan, 1.36 * scalePan()) < 1) return 'pan';
+  return null;
+}
+function guide() {
+  if (clean) return ['restart', objectPoint(boardObj), .66];
+  if (washing) {
+    let k = wetTarget || washThings.find(k => washAmount[k] < 1) || 'plate';
+    return [k, wetTarget ? stage.sink : objectPoint({
+      plate: plateObj,
+      board: boardObj,
+      knife
+    }[k]), .72];
+  }
+  if (meal) return ['eat', stage.plate, scalePlate()];
+  if (grip) {
+    if (grip.f) {
+      let f = grip.f,
+        dest = f.type === 'cabbage' || f.type === 'meat' && f.heat > .13 ? 'plate' : 'pan';
+      return [dest, stage[dest], dest === 'plate' ? scalePlate() : scalePan()];
+    }
+    if (grip.kind === 'sauce') return ['pan', stage.pan, scalePan()];
+  }
+  let onions = foods.filter(f => f.type === 'onion'),
+    onBoard = onions.find(f => f.zone === 'board'),
+    panOn = onions.some(f => f.zone === 'pan'),
+    leaves = foods.filter(f => f.type === 'cabbage'),
+    plated = leaves.filter(f => f.zone === 'plate'),
+    meat = foods.find(f => f.type === 'meat' && f.zone === 'pan');
+  if (firstServed && serveClock > 5 && !propped && foods.some(f => f.type === 'meat' && f.zone === 'plate')) return ['eat', objectPoint(chopsticks), .48];
+  if (!onions.length) return ['onion', stage.onion, .96 * vegScale];
+  if (onBoard) return ['piece', [onBoard.x, onBoard.y, onBoard.z], .41 * vegScale];
+  if (panOn && meat && !meat.sauce) return ['sauce', stage.sauce, .51 * vegScale];
+  if (leaves.some(f => f.zone === 'board')) {
+    let f = leaves.find(f => f.zone === 'board');
+    return ['piece', [f.x, f.y, f.z], .44 * vegScale];
+  }
+  if (plated.length < 2) return ['cabbage', stage.cabbage, .8 * vegScale];
+  if (meat && meat.heat > .13 && !firstServed) return ['meat', [meat.x, meat.y, meat.z], .76 * scalePan()];
+  if (foods.some(f => f.zone === 'plate' && f.type === 'meat')) return ['eat', objectPoint(chopsticks), .48];
+  return ['onion', stage.onion, .96 * vegScale];
+}
+function reset() {
+  for (let f of [...foods, ...pools]) {
+    gl.deleteBuffer(f.obj.buf);
+    if (f.obj.elements) gl.deleteBuffer(f.obj.elements);
+    objects.splice(objects.indexOf(f.obj), 1);
+  }
+  foods = [];
+  cuts = [];
+  pools.length = 0;
+  effects.length = 0;
+  burner = meal = washing = clean = firstServed = finishedMeal = false;
+  wetTarget = propped = null;
+  mealTime = stow = wet = follow = cabbageCuts = cabbageNotch = bites = 0;
+  washAmount = {
+    board: 0,
+    plate: 0,
+    knife: 0
+  };
+  rebuildBulb();
+  oilObj.visible = bodyObj.visible = cabbageObj.visible = scraps.visible = true;
+  setLayout();
+  newMeats();
+  lastInput = now;
+}
+function startEat() {
+  if (!meal) {
+    meal = true;
+    mealClock = 0;
+    follow = Math.max(.45, follow);
+  }
+  let f = foods.find(v => v.zone === 'plate' && !v.eating && v.consumed < 1);
+  if (f) {
+    f.eating = true;
+    f.diner = bites % 2;
+    f.eatStart = [f.x, f.y, f.z];
+    bites++;
+    sound('plate', .34);
+  }
+  mealClock = 0;
+}
+function beginWash() {
+  chopsticks.model = portrait ? pose(-.9, .006, 3.42, .52, 0, 0, .72) : pose(2.83, .02, 3.44, 1.48, 0, 0, .94);
+  meal = false;
+  washing = true;
+  follow = 0;
+  wet = 1;
+  wetTarget = null;
+  stow = 0;
+  lastInput = now;
+}
+function startGesture(e) {
+  if (activeId !== null || e.button > 0) return;
+  e.preventDefault();
+  audioStart();
+  let x = e.clientX,
+    y = e.clientY,
+    t = targetAt(x, y);
+  activeId = e.pointerId;
+  try {
+    canvas.setPointerCapture(activeId);
+  } catch (_) {}
+  lastInput = now;
+  actionMotion = 0;
+  press = {
+    x,
+    y,
+    x0: x,
+    y0: y,
+    lastX: x,
+    lastY: y,
+    t,
+    moved: 0,
+    at: now
+  };
+  if (!t) {
+    disturb = .042;
+    return;
+  }
+  if (t === 'restart') {
+    reset();
+    return;
+  }
+  if (washing) {
+    grip = {
+      kind: 'wash',
+      item: t,
+      start: objectPoint({
+        plate: plateObj,
+        board: boardObj,
+        knife
+      }[t]),
+      amount: 0
+    };
+    return;
+  }
+  if (t === 'eat') {
+    startEat();
+    return;
+  }
+  if (typeof t === 'object') {
+    let f = t;
+    f.propped = false;
+    if (propped === f) propped = null;
+    let point = ground(x, y, f.y);
+    grip = {
+      f,
+      dx: f.x - point[0],
+      dz: f.z - point[2],
+      plane: f.y,
+      offset: [f.x, f.z]
+    };
+    f.from = f.zone;
+    f.stack = false;
+    f.stackReady = false;
+    f.gripAt = clamp(localTo(f, point[0], point[2])[0] / f.len + .5, 0, 1);
+    f.holdHeight = .54 * vegScale;
+    moveZone(f, 'hand');
+    f.vy = 1.1;
+    if (f.type === 'meat') f.nodes[Math.round(f.gripAt * 12)].y += .13;else f.y += .075;
+    f.obj.model[13] += .08;
+    sound('lift', .47, f.width);
+    return;
+  }
+  if (t === 'onion' || t === 'cabbage') {
+    if (foods.filter(f => f.type === t && f.consumed < 1).length >= (t === 'onion' ? 18 : 32)) {
+      knifeMotion = .24;
+      return;
+    }
+    if (t === 'onion' && refill) rebuildBulb();
+    let o = stage[t],
+      q = ground(x, y, o[1] + .38 * vegScale),
+      start = mul(sub(q, o), 1 / vegScale);
+    start[0] = clamp(start[0], -.95, .95);
+    start[2] = clamp(start[2], -.75, .25);
+    cut = {
+      kind: t,
+      start,
+      origin: q,
+      progress: .12,
+      distance: 0,
+      angle: -.28,
+      at: now
+    };
+    if (t === 'onion') {
+      cut.obj = object(() => {});
+      prepareBlade(cut, [.24, 0, .97]);
+      bodyObj.model = pose(o[0] - .018, o[1], o[2], 0, 0, -.032, vegScale);
+      cut.obj.model = pose(...add(o, mul(cut.center, vegScale)), 0, 0, .045, vegScale);
+    }
+    knifeMotion = 1;
+    knife.model[13] -= .115 * vegScale;
+    sound(t === 'onion' ? 'cut' : 'leaf', .68);
+    return;
+  }
+  if (t === 'sauce') {
+    grip = {
+      kind: 'sauce',
+      x: stage.sauce[0],
+      z: stage.sauce[2],
+      pouring: false
+    };
+    sauceTilt = .18;
+    sound('plate', .26);
+  } else if (t === 'pan') {
+    burner = true;
+    panFlash = .43;
+    sound('board', .27);
+  }
+}
+function scrub(item, amount) {
+  wet = 1;
+  let old = washAmount[item];
+  washAmount[item] = clamp(old + amount, 0, 1);
+  if (Math.floor(old * 14) !== Math.floor(washAmount[item] * 14)) {
+    let p = stage.sink;
+    particle('foam', p[0] + (rnd() - .5) * .82, .26, p[2] + (rnd() - .5) * .41, 0, .12, 0, .62, .042 + rnd() * .058);
+    sound('wash', .32);
+  }
+  if (washAmount[item] >= 1 && old < 1) {
+    sound('water', .69);
+    wetTarget = null;
+    washed++;
+    if (washThings.every(k => washAmount[k] >= 1)) {
+      clean = true;
+      washing = false;
+      lastInput = now;
+    }
+  }
+}
+function moveGesture(e) {
+  if (e.pointerId !== activeId || !press) return;
+  e.preventDefault();
+  let x = clamp(e.clientX, safe[0] + 2, W - safe[2] - 2),
+    y = clamp(e.clientY, safe[1] + 2, H - safe[3] - 2);
+  let travel = Math.hypot(x - press.x, y - press.y);
+  press.moved += travel;
+  press.lastX = press.x;
+  press.lastY = press.y;
+  press.x = x;
+  press.y = y;
+  lastInput = now;
+  actionMotion = clamp(travel * .03, 0, 1);
+  if (cut) {
+    let o = stage[cut.kind],
+      q = ground(x, y, o[1] + .38 * vegScale),
+      d = sub(q, cut.origin);
+    cut.distance = Math.hypot(d[0], d[2]) / vegScale;
+    if (cut.distance > .09) {
+      cut.angle = Math.atan2(d[2], d[0]);
+      if (cut.kind === 'onion' && (!cut.directed || cut.progress < .30 && Math.abs(cut.a - cut.angle) > .13)) {
+        prepareBlade(cut, unit([d[0], 0, d[2]]));
+        cut.directed = true;
+      }
+    }
+    cut.progress = Math.max(cut.progress, clamp(.12 + cut.distance / (cut.kind === 'onion' ? .91 : 1.9), 0, 1));
+    if (cut.kind === 'onion' && cut.raw) openLayers(cut);
+    if (cut.kind === 'onion' && cut.progress >= 1) {
+      releaseSlice(cut);
+      cut = null;
+      knifeMotion = .8;
+      actionMotion = 1;
+    }
+    return;
+  }
+  if (!grip) return;
+  if (grip.kind === 'wash') {
+    if (washAmount[grip.item] >= 1) return;
+    let p = stage.sink,
+      q = ground(x, y, p[1] + .2);
+    grip.point = q;
+    if (Math.hypot(q[0] - p[0], q[2] - p[2]) < 1.2 || wetTarget === grip.item) {
+      wetTarget = grip.item;
+      scrub(grip.item, travel / (portrait ? 235 : 350));
+    }
+    return;
+  }
+  if (grip.kind === 'sauce') {
+    let q = ground(x, y, stage.pan[1] + .25);
+    grip.x = clamp(q[0], portrait ? -2 : -4, portrait ? 2 : 4.6);
+    grip.z = clamp(q[2], -3.7, 3.5);
+    grip.pouring = Math.hypot(q[0] - stage.pan[0], q[2] - stage.pan[2]) < 1.77 * scalePan();
+    return;
+  }
+  if (grip.f) {
+    let f = grip.f,
+      p = ground(x, y, grip.plane);
+    f.tx = clamp(p[0] + grip.dx, portrait ? -2.1 : -4.65, portrait ? 2.08 : 4.75);
+    f.tz = clamp(p[2] + grip.dz, -3.5, 4);
+    f.holdHeight = .62 * vegScale + Math.min(.43, travel * .009);
+    if (f.type === 'meat' && f.from === 'pan' && f.heat > .13) {
+      let a = stage.plate,
+        b = stage.pan,
+        v = sub(a, b),
+        t = dot(sub([f.tx, b[1], f.tz], b), v) / dot(v, v);
+      if (t > .32) {
+        firstServed = true;
+        serveClock = 0;
+        follow = Math.max(follow, clamp((t - .26) * .71, 0, .46));
+      }
+    }
+  }
+}
+function drop(f) {
+  let x = press.x,
+    y = press.y,
+    tapped = press.moved < 11,
+    p = stage.plate,
+    k = stage.pan;
+  let pd = nearPoint(x, y, add(p, [0, .10, 0]), 1.27 * scalePlate(), .74),
+    kd = nearPoint(x, y, add(k, [0, .17, 0]), 1.5 * scalePan(), .7);
+  let zone = tapped ? f.from : pd < 1.28 && pd < kd ? 'plate' : kd < 1.3 ? 'pan' : 'board';
+  if (zone === 'plate' && f.type === 'meat' && f.heat < .12) zone = 'pan';
+  if (tapped && f.type === 'meat' && f.from === 'pan') {
+    f.side = 1 - f.side;
+    f.turn += PI;
+    for (let n of f.nodes) n.vy += .9 * f.gripAt;
+    sound('board', .4);
+  }
+  if (tapped && f.type === 'meat' && f.from === 'plate') {
+    f.propped = true;
+    propped = f;
+    f.propTime = now;
+    for (let n of f.nodes) n.vy += 1.6;
+  }
+  let center = stage[zone],
+    q = tapped ? [f.x, 0, f.z] : ground(x, y, surfaceY(zone));
+  let dx = q[0] - center[0],
+    dz = q[2] - center[2];
+  if (zone === 'board') {
+    dx = clamp(dx, -1.72 * vegScale, 1.75 * vegScale);
+    dz = clamp(dz, -.98 * vegScale, 1.01 * vegScale);
+  } else {
+    let radius = zone === 'tray' ? .34 : zone === 'pan' ? 1.13 * scalePan() : 1.01 * scalePlate(),
+      d = Math.hypot(dx, dz);
+    if (d > radius) {
+      dx *= radius / d;
+      dz *= radius / d;
+    }
+  }
+  if (zone === 'pan') burner = true;
+  f.tx = center[0] + dx;
+  f.tz = center[2] + dz;
+  if (f.type === 'cabbage') {
+    if (tapped && zone === 'plate') f.angleGoal = f.angle + PI * .25;
+    f.order = ++order;
+    for (let s of foods) if (s.zone === zone && s.type === 'cabbage' && s !== f) {
+      let x = s.tx - f.tx,
+        z = s.tz - f.tz,
+        d = Math.hypot(x, z);
+      if (d < .6) {
+        s.tx += .045 * x / (d + .04);
+        s.tz += .045 * z / (d + .04);
+        s.vy += .13;
+      }
+    }
+    if (propped && zone === 'plate') {
+      propped.propped = false;
+      propped = null;
+    }
+  }
+  if (f.type === 'onion' && f.soft > .54 && zone === 'pan') {
+    let m = foods.find(s => s.type === 'meat' && s.zone === 'pan' && footprint(s, f.tx, f.tz) > .35);
+    if (m && f.stackReady) f.stack = m.id;
+  }
+  moveZone(f, zone);
+  if (f.type === 'meat' && zone === 'plate') {
+    firstServed = true;
+    follow = Math.max(.52, follow);
+    serveClock = 0;
+  }
+  sound(zone === 'plate' ? 'plate' : 'board', .51, f.width);
+}
+function endGesture(cancelled = false) {
+  if (cut) {
+    if (cut.kind === 'onion') {
+      if (!cancelled && cut.progress > .69) {
+        releaseSlice(cut);
+      } else if (!cancelled && cut.progress <= .13) {
+        // Short taps advance one score in manageable strokes.
+        tapScore += .34;
+        if (tapScore >= 1) {
+          releaseSlice(cut);
+          tapScore = 0;
+        } else {
+          discardCut(cut);
+        }
+      } else discardCut(cut);
+    } else if (!cancelled) {
+      cutLeaf(cut);
+    }
+    cut = null;
+  }
+  if (grip?.f) {
+    if (cancelled) {
+      let f = grip.f;
+      moveZone(f, f.from);
+      f.tx = grip.offset[0];
+      f.tz = grip.offset[1];
+    } else drop(grip.f);
+  }
+  if (grip?.kind === 'sauce' && !cancelled && press?.moved < 12) {
+    sauceFlow = 1.6;
+    sound('water', .46);
+  }
+  if (grip?.kind === 'wash' && !cancelled && press?.moved < 13 && washAmount[grip.item] < 1) {
+    if (wetTarget === grip.item) scrub(grip.item, .25);else wetTarget = grip.item;
+  }
+  grip = null;
+  press = null;
+  activeId = null;
+  lastInput = now;
+}
+let tapScore = 0;
+function discardCut(c) {
+  upload(bodyObj, solidData(body));
+  gl.deleteBuffer(c.obj.buf);
+  objects.splice(objects.indexOf(c.obj), 1);
+}
+canvas.addEventListener('pointerdown', startGesture);
+canvas.addEventListener('pointermove', moveGesture);
+canvas.addEventListener('pointerup', e => {
+  if (e.pointerId === activeId) {
+    if (press && Math.abs(e.clientX - press.x) + Math.abs(e.clientY - press.y) > 1) moveGesture(e);
+    endGesture();
+  }
+});
+for (let event of ['pointercancel', 'lostpointercapture']) canvas.addEventListener(event, e => {
+  if (e.pointerId === activeId) endGesture(true);
+});
+for (let event of ['contextmenu', 'gesturestart', 'gesturechange', 'dblclick']) document.addEventListener(event, e => e.preventDefault(), {
+  passive: false
+});
+function updatePeople(dt, demo, target) {
+  for (let p of people) {
+    let k = p.k,
+      s = k ? .97 : 1.16,
+      x = k ? -3.28 : -1.88,
+      z = k ? -1.47 : -1.39,
+      y = k ? .054 : .28;
+    if (portrait) {
+      x = k ? -1.85 : -.86;
+      z = k ? -2.70 : -2.91;
+      s *= .85;
+      y = k ? .2 : .31;
+    }
+    let yaw = k ? .41 : .13,
+      yawLook = clamp(Math.atan2(target[0] - x, target[2] - z), -.65, .65);
+    let breath = sin(now * 1.47 + (k ? .4 : 2)) * .014,
+      base = pose(x, y + breath, z, yaw, .075, 0, s);
+    p.body.model = base;
+    if (!k) {
+      p.arms[1].visible = false;
+      supportHand(base, demo);
+    }
+    let gesture = meal ? .14 * sin(now * 1.75 + (k ? 0 : 2)) : .012 * sin(now * .85);
+    p.head.model = mm(base, pose(0, 1.38 + breath, .08, yawLook * .48 + .009 * sin(now * .72), .17 + .034 * sin(now * .78) + gesture, k ? -.054 : .018));
+    for (let i = 0; i < 2; i++) {
+      let show = demo && i === (k ? 1 : 0),
+        sway = show ? .09 * sin(demoPhase * TAU) : 0,
+        lift = meal && i === 1 ? .64 * (.5 + .5 * sin(now * 1.65 + (k ? 0 : 2))) : 0;
+      p.arms[i].model = mm(base, mm(pose(0, .65, 0), mm(pose(0, 0, 0, sway + .015 * sin(now + i), -lift - .02 * cos(now * 1.2 + i) - sway * .4), pose(0, -.65, 0))));
+    }
+  }
+}
+function aimObjects(dt) {
+  let [name, target, r] = guide();
+  guideTarget = name;
+  highlight = [...target, r];
+  let idle = now - lastInput;
+  demoPhase = Math.max(0, idle - 4) % 6 / 2.2;
+  let demo = idle > 4 && demoPhase < 1 && !press;
+  updatePeople(dt, demo, target);
+  let pulse = .5 + .5 * sin(now * 2.8);
+  hints.visible = !meal && !washing && !clean && !cut;
+  let hy = name === 'onion' ? stage.board[1] + .014 : name === 'sauce' || name === 'cabbage' ? .022 : target[1] + .024;
+  hints.model = pose(target[0], hy, target[2], .1 + now * .035, 0, 0, r * (.97 + .034 * pulse));
+  knifeMotion *= Math.exp(-dt * 4.1);
+  disturb *= Math.exp(-dt * 6);
+  panFlash *= Math.exp(-dt * 3.8);
+  actionMotion *= Math.exp(-dt * 5);
+  let o = stage.onion,
+    s = vegScale;
+  let knifeGoal = add(o, [.56 * s, .12 * s, .41 * s]);
+  let yaw = -.44,
+    roll = -.07,
+    pitch = .013;
+  if (cut) {
+    let p = stage[cut.kind],
+      dir = cut.kind === 'onion' ? cut.a ?? -.4 : cut.angle;
+    let norm = cut.n || [0, 0, 1];
+    let c = cut.center || [0, .6, 0];
+    let a = cut.progress;
+    knifeGoal = [p[0] + (c[0] + cos(dir) * (.47 + a * .28)) * s, p[1] + (.72 - a * .60) * s, p[2] + (c[2] + sin(dir) * (.47 + a * .28)) * s];
+    yaw = -dir;
+    roll = .13 - a * .17;
+    if (cut.kind === 'onion' && cut.obj) {
+      let off = (.018 + .105 * a * a) * s;
+      cut.obj.model = pose(p[0] + c[0] * s + norm[0] * off, p[1] + c[1] * s, p[2] + c[2] * s + norm[2] * off, 0, a * a * norm[2] * .15, -a * a * norm[0] * .15, s);
+      if (Math.floor(a * 6) > (cut.tick || 0)) {
+        cut.tick = Math.floor(a * 6);
+        sound('cut', .26 + actionMotion * .4);
+        particle('fiber', knifeGoal[0], knifeGoal[1], knifeGoal[2], norm[0] * .05, .07, norm[2] * .05, .24, .016);
+      }
+    }
+  } else if (demo && name === 'onion') {
+    let a = sin(PI * demoPhase) ** 2;
+    knifeGoal[0] -= .23 * a * s;
+    knifeGoal[1] += .065 * a * s;
+    knifeGoal[2] -= .17 * a * s;
+    roll += .09 * a;
+  } else if (demo && name === 'cabbage') {
+    knifeGoal = add(stage.cabbage, [.48 * s, (.52 - .14 * sin(PI * demoPhase)) * s, .26 * s]);
+  }
+  knifeGoal[1] -= knifeMotion * .15 * s;
+  knifePos = lerp(knifePos, knifeGoal, 1 - Math.exp(-dt * (cut ? 33 : 9)));
+  knifeYaw += Math.atan2(sin(yaw - knifeYaw), cos(yaw - knifeYaw)) * (1 - Math.exp(-dt * 13));
+  knife.model = pose(...knifePos, knifeYaw, pitch, roll, s);
+  bodyObj.model = pose(o[0], o[1], o[2], 0, 0, (cut?.kind === 'onion' ? -.03 * cut.progress : knifeMotion * -.035) + disturb * .12, s * (1 - stow * .97));
+  let cp = stage.cabbage;
+  cabbageObj.model = pose(cp[0], cp[1] - .09, cp[2], -.25 - cabbageNotch * .56, 0, cut?.kind === 'cabbage' ? .048 * cut.progress : 0, (portrait ? .76 : 1) * (1 - cabbageNotch) * (1 - stow * .96));
+  let sp = stage.sauce,
+    pp = stage.pan;
+  let pouring = grip?.kind === 'sauce' && grip.pouring;
+  let pg = grip?.kind === 'sauce' ? [grip.x + .22, .83, grip.z] : sp;
+  if (sauceFlow > 0) pg = add(pp, [.65, .83, 0]);
+  let pp0 = objectPoint(pitcher),
+    newP = lerp(pp0, pg, 1 - Math.exp(-dt * 7));
+  sauceTilt = mix(sauceTilt, pouring || sauceFlow > 0 ? .89 : grip?.kind === 'sauce' ? .18 : 0, 1 - Math.exp(-dt * 7));
+  pitcher.model = pose(...newP, -.2, 0, sauceTilt, portrait ? .82 : 1);
+  if (pouring || sauceFlow > 0) {
+    let x = pouring ? grip.x : pp[0],
+      z = pouring ? grip.z : pp[2];
+    pour(x, z, dt);
+    if (rnd() < dt * 18) particle('juice', newP[0] - .51, newP[1] + .44, newP[2], -.14, -.5, 0, .51, .038);
+    sauceFlow = Math.max(0, sauceFlow - dt);
+  }
+  if (sizzleGain && now >= soundClock) {
+    soundClock = now + .12;
+    let val = foods.some(f => f.zone === 'pan') && !meal && !washing && !clean ? .016 + panFlash * .014 : 0;
+    sizzleGain.gain.setTargetAtTime(val * (.83 + .17 * sin(now * 3)), audioCtx.currentTime, .19);
+  }
+  if (washing || clean) {
+    stow = Math.min(1, stow + dt * .7);
+    oilObj.visible = stow < .78;
+    wet = Math.max(clean ? .12 : .34, wet - dt * .025);
+    for (let k of washThings) {
+      let obj = {
+          plate: plateObj,
+          board: boardObj,
+          knife
+        }[k],
+        moving = grip?.kind === 'wash' && grip.item === k,
+        done = washAmount[k] >= 1,
+        base = k === 'knife' ? knifePos : stage[k];
+      if (!moving && !done && wetTarget !== k) continue;
+      let target = done ? add(objectPoint(rack), [k === 'board' ? .24 : k === 'plate' ? -.09 : .76, k === 'knife' ? .78 : k === 'plate' ? portrait ? .90 : 1.02 : portrait ? .72 : .86, k === 'board' ? -.28 : k === 'plate' ? .13 : .39]) : moving && grip.point && !wetTarget ? grip.point : add(stage.sink, [0, .24, 0]);
+      let current = k === 'knife' && knife.washPos ? knife.washPos : objectPoint(obj);
+      let a = lerp(current, target, 1 - Math.exp(-dt * 8));
+      if (k === 'knife') knife.washPos = a;
+      let sc = k === 'board' ? portrait ? .52 : .63 : k === 'plate' ? portrait ? .68 : .8 : vegScale;
+      let angle = done ? 1.34 : moving ? .12 * sin(now * 16) : .14;
+      if (done && k === 'knife') {
+        obj.model = pose(...a, -.38, .06, 1.40, sc * .82);
+      } else {
+        obj.model = pose(...a, done ? -.73 : 0, angle, 0, sc);
+      }
+    }
+    for (let f of foods) if (!f.eating) {
+      f.obj.model = mm(f.obj.model, pose(0, 0, 0, 0, 0, 0, 1 - stow * .985));
+      if (stow >= 1) f.obj.visible = false;
+    }
+    for (let p of pools) p.obj.visible = !clean && washAmount.plate === 0;
+    if (stow >= 1) {
+      bodyObj.visible = scraps.visible = cabbageObj.visible = false;
+    }
+  }
+}
+let lastStamp = 0,
+  raf = 0,
+  frame = 0,
+  frameAverage = 16.7;
+function update(dt) {
+  now += dt;
+  serveClock += dt;
+  if (grip?.f && press && press.moved < 9 && now - press.at > .46) {
+    grip.f.stackReady = true;
+    grip.f.holdHeight = .88 * vegScale;
+  }
+  if (!grip && firstServed && !meal) {
+    let goal = serveClock < 4 && foods.some(f => f.zone === 'plate' && f.type === 'meat') ? .88 : 0;
+    follow = mix(follow, goal, 1 - Math.exp(-dt * (goal > follow ? 1.1 : .6)));
+  }
+  if (meal) {
+    mealClock += dt;
+    mealTime += dt;
+    if (mealClock > 2.9) {
+      if (foods.some(f => f.zone === 'plate' && f.consumed < 1)) startEat();else beginWash();
+    }
+  }
+  camera(dt);
+  advanceFoods(dt);
+  aimObjects(dt);
+  effectsStep(dt);
+}
+function render() {
+  let l = depthLoc;
+  gl.bindFramebuffer(gl.FRAMEBUFFER, fb);
+  gl.viewport(0, 0, shadowSize, shadowSize);
+  gl.clearColor(1, 1, 1, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  gl.useProgram(l.p);
+  gl.uniformMatrix4fv(l.u.vp, false, light);
+  draw(l, true);
+  gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+  gl.viewport(0, 0, canvas.width, canvas.height);
+  gl.clearColor(.79, .76, .66, 1);
+  gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+  l = colorLoc;
+  gl.useProgram(l.p);
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, shadowTex);
+  gl.uniform1i(l.u.shadow, 0);
+  gl.uniformMatrix4fv(l.u.vp, false, vp);
+  gl.uniformMatrix4fv(l.u.light, false, light);
+  gl.uniform3fv(l.u.eye, eye);
+  gl.uniform3fv(l.u['anchors[0]'], [...stage.onion, ...stage.pan, ...stage.cabbage, ...stage.sauce, ...stage.plate]);
+  gl.uniform4fv(l.u.glint, highlight);
+  gl.uniform1f(l.u.time, now);
+  gl.uniform2f(l.u.resolution, canvas.width, canvas.height);
+  draw(l, false);
+}
+function loop(stamp) {
+  raf = 0;
+  if (document.hidden) return;
+  resize();
+  let interval = stamp - (lastStamp || stamp - 16.7);
+  frameAverage = mix(frameAverage, Math.min(90, interval), .045);
+  if (frame % 60 === 59 && frameAverage > 24 && dpr > .86) {
+    dpr = Math.max(.85, dpr - .16);
+    canvas.width = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    frameAverage = 19;
+  }
+  let dt = Math.min(.06, interval / 1000);
+  lastStamp = stamp;
+  let steps = Math.max(1, Math.ceil(dt / .025));
+  for (let i = 0; i < steps; i++) update(dt / steps);
+  render();
+  frame++;
+  raf = requestAnimationFrame(loop);
+}
+function wake() {
+  if (document.hidden) {
+    if (raf) cancelAnimationFrame(raf);
+    raf = 0;
+    endGesture(true);
+    audioCtx?.suspend().catch(() => {});
+  } else {
+    lastStamp = 0;
+    if (!raf) raf = requestAnimationFrame(loop);
+    if (audioCtx) audioCtx.resume().catch(() => {});
+  }
+}
+document.addEventListener('visibilitychange', wake);
+window.addEventListener('pagehide', () => {
+  endGesture(true);
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+  audioCtx?.suspend().catch(() => {});
+});
+window.addEventListener('pageshow', wake);
+canvas.addEventListener('webglcontextlost', e => {
+  e.preventDefault();
+  if (raf) cancelAnimationFrame(raf);
+  raf = 0;
+});
+canvas.addEventListener('webglcontextrestored', () => location.reload());
+resize();
+newMeats();
+update(.016);
+render();
+wake();
+</script>
+</body>
+</html>
