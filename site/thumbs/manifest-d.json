@@ -15,6 +15,10 @@
   "file": "thumbs/d-04.webp",
   "kind": "real"
  },
+ "d-05": {
+  "file": "thumbs/placeholder-d-05.svg",
+  "kind": "placeholder"
+ },
  "d-07": {
   "file": "thumbs/placeholder-d-07.svg",
   "kind": "placeholder"
