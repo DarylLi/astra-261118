@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#cdd2be">
+<link rel="icon" href="data:,">
+<title>ショベルカーでほりほり</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body,main{position:relative;margin:0;width:100%;height:100%;overflow:hidden;background:#cdd2be;touch-action:none;overscroll-behavior:none;user-select:none;-webkit-user-select:none}
+#view{display:block;width:100%;height:100%;position:absolute;inset:0;outline:none}
+#stages,#sound,#meter{position:absolute;z-index:2;display:flex;align-items:center;justify-content:center}
+#stages,#sound{background:linear-gradient(150deg,rgba(255,252,231,.95),rgba(240,236,211,.91));border:1px solid rgba(255,255,242,.85);box-shadow:0 3px 10px #29352c23,inset 0 -2px 0 #79765e1a}
+#stages{top:calc(env(safe-area-inset-top) + 24px);left:calc(env(safe-area-inset-left) + 25px);border-radius:32px;height:54px;padding:4px 10px 4px 5px;gap:3px;pointer-events:none}
+.stage{width:38px;height:38px;display:grid;place-items:center;border-radius:50%;opacity:.61;transition:background .45s,opacity .45s}
+.stage.active{width:43px;height:43px;background:linear-gradient(140deg,#f7d479,#e7b953);box-shadow:inset 0 1px 1px #fff1bc,inset 0 -1px 2px #ac832c54;opacity:1}
+.stage.past{opacity:.83}
+.dot{width:9px;height:2px;border-radius:2px;background:#8d927976}
+.glyph{width:31px;height:31px;display:block}
+#sound{right:calc(env(safe-area-inset-right) + 25px);top:calc(env(safe-area-inset-top) + 24px);width:51px;height:51px;border-radius:50%;cursor:pointer;padding:10px}
+#sound:active{transform:scale(.94)}
+#meter{left:50%;bottom:calc(env(safe-area-inset-bottom) + 25px);transform:translateX(-50%);min-width:183px;height:43px;border-radius:25px;gap:11px;padding:3px 14px 3px 12px;background:linear-gradient(155deg,rgba(48,56,48,.90),rgba(45,50,43,.88));border:1px solid #ede4bf65;box-shadow:0 3px 11px #211f173b,inset 0 1px 0 #fff5d914;pointer-events:none}
+#meter .glyph{width:28px;height:28px}
+#level{display:flex;gap:3px;height:10px}
+#level span{width:11px;height:10px;overflow:hidden;background:#c5c6a72e;border:1px solid #e3dfbc17;border-radius:2px;transform:skew(-10deg)}
+#level i{display:block;width:100%;height:100%;background:#edc56c;transform-origin:left;transform:scaleX(0)}
+#hand{position:absolute;left:0;top:0;width:54px;height:67px;pointer-events:none;z-index:1;filter:drop-shadow(0 2px 3px #302b264d)}
+@media(max-width:580px){#stages{left:16px;top:calc(env(safe-area-inset-top) + 16px);transform:scale(.90);transform-origin:top left}#sound{width:45px;height:45px;right:16px;top:calc(env(safe-area-inset-top) + 16px)}#meter{bottom:calc(env(safe-area-inset-bottom) + 20px)}}
+</style>
+</head>
+<body>
+<main>
+<canvas id="view" aria-label="春の空き地のショベルカー"></canvas>
+<div id="stages" aria-hidden="true"><div class="stage active"><canvas class="glyph" data-icon="bucket"></canvas></div><i class="dot"></i><div class="stage"><canvas class="glyph" data-icon="drop"></canvas></div><i class="dot"></i><div class="stage"><canvas class="glyph" data-icon="chest"></canvas></div></div>
+<button id="sound" aria-label="音の切り替え" aria-pressed="true"><canvas class="glyph" data-icon="sound"></canvas></button>
+<div id="meter" aria-hidden="true"><canvas class="glyph" id="meter-left"></canvas><div id="level"></div><canvas class="glyph" id="meter-right"></canvas></div>
+<canvas id="hand" width="108" height="134" aria-hidden="true" style="opacity:0"></canvas>
+</main>
+<script src="vendor/three.min.js"></script>
+<script src="simulation.js"></script>
+<script src="geometry.js"></script>
+<script src="machines.js"></script>
+<script src="land.js"></script>
+<script src="interface.js"></script>
+<script src="game.js"></script>
+</body>
+</html>

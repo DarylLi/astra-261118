@@ -1,0 +1,182 @@
+{
+  "interval_s": 0.05,
+  "rows": 1133,
+  "cells": 713,
+  "events": {
+    "demo_s": 4.049999999999958,
+    "idle": {
+      "pollen_m": 0.5766980148859834,
+      "windDifference_rad": 0.08966461548699359,
+      "cloudDifference": 0.22167281861745625,
+      "waterDisplacement_m": 0.0004765598010232966,
+      "engine_m": 0.0011636543445348823
+    },
+    "load_m3": 1.0200000000000007,
+    "rear_m": 0.12708186539404706,
+    "front_m": 0.047370580207834384,
+    "truckSpeed_mps": 4.590097767996555,
+    "water_m3": 0.03409326103606808,
+    "wetCells": 19,
+    "waterDepth_m": 0.3030882514653115,
+    "lid_rad": 2.020031159488254,
+    "trumpetLift_m": 0.9252336812356261,
+    "trumpetSwing_rad": 0.06591905164449934,
+    "loadedCompartments": 41,
+    "return_s": 35.550000000001496,
+    "strokes": 3
+  },
+  "hardness": [
+    {
+      "hardness": 0.7,
+      "press_s": 0.95,
+      "volume_m3": 0.3341079089768279,
+      "depth_m": 0.504238844074659,
+      "activeCells": 108
+    },
+    {
+      "hardness": 1.4,
+      "press_s": 0.95,
+      "volume_m3": 0.16705395448841395,
+      "depth_m": 0.2521194220373295,
+      "activeCells": 108
+    },
+    {
+      "hardness": 0.7,
+      "press_s": 0.75,
+      "volume_m3": 0.22037856610365242,
+      "depth_m": 0.34413827165826666,
+      "activeCells": 103
+    }
+  ],
+  "maxAdjacentDeltas": {
+    "soilDepth_m": 0.04154209320488407,
+    "waterDepth_m": 0.016312630788515775,
+    "moisture_fraction": 0.016787703218015704,
+    "grassBend_rad": 0.006517113510405945,
+    "pollenDistance_m": 0.013180256703176452,
+    "puddleHeight_m": 0.0010486580074925765,
+    "cloudCover_fraction": 0.005945212097176689,
+    "engineTravel_m": 0.002791131810000983,
+    "toolDistance_m": 0.3708574414692345,
+    "bucketCurl_rad": 0.17500000000000016,
+    "truckTravel_m": 0.2799999474189989,
+    "onTruck_m3": 0.14207786404644118,
+    "deposited_m3": 0.039200000000000124,
+    "bedCompartment_m3": 0.008105985383825655,
+    "suspension_m": 0.012114490432765676,
+    "chestTravel_m": 0.08327356959133828,
+    "lid_rad": 0.15216476096432063,
+    "hornLift_m": 0.07932941035925656,
+    "hornRock_rad": 0.0477879072893124,
+    "focus_fraction": 0.029764862730281227,
+    "grainTravel_m": 0.22794273339928092
+  },
+  "sectionChanges": {
+    "grass": {
+      "moving": 1128,
+      "uniform": 0,
+      "maxActive": 16
+    },
+    "pollen": {
+      "moving": 1128,
+      "uniform": 0,
+      "maxActive": 43
+    },
+    "cloud": {
+      "moving": 1128,
+      "uniform": 0,
+      "maxActive": 3
+    },
+    "puddle": {
+      "moving": 1068,
+      "uniform": 0,
+      "maxActive": 36
+    },
+    "earth": {
+      "moving": 222,
+      "uniform": 0,
+      "maxActive": 241
+    },
+    "bed": {
+      "moving": 402,
+      "uniform": 0,
+      "maxActive": 41
+    },
+    "water": {
+      "moving": 319,
+      "uniform": 0,
+      "maxActive": 19
+    }
+  },
+  "phases": {
+    "idle": [
+      {
+        "phase": "soil",
+        "time_s": 0
+      }
+    ],
+    "soft": [
+      {
+        "phase": "soil",
+        "time_s": 0
+      }
+    ],
+    "hard": [
+      {
+        "phase": "soil",
+        "time_s": 0
+      }
+    ],
+    "short": [
+      {
+        "phase": "soil",
+        "time_s": 0
+      }
+    ],
+    "cycle": [
+      {
+        "phase": "soil",
+        "time_s": 0
+      },
+      {
+        "phase": "spring",
+        "time_s": 15.299999999999718
+      },
+      {
+        "phase": "chest",
+        "time_s": 17.39999999999992
+      },
+      {
+        "phase": "opening",
+        "time_s": 20.250000000000366
+      },
+      {
+        "phase": "horn",
+        "time_s": 21.450000000000554
+      },
+      {
+        "phase": "reset",
+        "time_s": 30.050000000001898
+      },
+      {
+        "phase": "soil",
+        "time_s": 35.550000000001496
+      }
+    ]
+  },
+  "bounds": {
+    "soilDepth_m": 0.075,
+    "waterDepth_m": 0.04,
+    "puddleHeight_m": 0.003,
+    "toolDistance_m": 0.43,
+    "truckTravel_m": 0.29,
+    "suspension_m": 0.035,
+    "lid_rad": 0.24,
+    "hornLift_m": 0.15,
+    "focus_fraction": 0.055,
+    "deposited_m3": 0.14,
+    "grassBend_rad": 0.03,
+    "chestTravel_m": 0.16,
+    "hornRock_rad": 0.095
+  }
+}
