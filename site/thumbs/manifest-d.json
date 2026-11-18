@@ -39,6 +39,10 @@
   "file": "thumbs/d-10.webp",
   "kind": "real"
  },
+ "d-12": {
+  "file": "thumbs/placeholder-d-12.svg",
+  "kind": "placeholder"
+ },
  "d-21": {
   "file": "thumbs/d-21.webp",
   "kind": "real"
