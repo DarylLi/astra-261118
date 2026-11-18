@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#b7cbd5">
+<title>じょせつしゃで朝の道</title>
+<style>
+*{box-sizing:border-box}
+html,body,main{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none}
+body{background:#c6d5dd;-webkit-tap-highlight-color:transparent;user-select:none;-webkit-user-select:none}
+main{position:relative;height:100dvh}
+canvas{display:block;width:100%;height:100%;touch-action:none;outline:none}
+button{position:absolute;right:max(18px,env(safe-area-inset-right));top:max(18px,env(safe-area-inset-top));width:44px;height:44px;padding:0;border:1px solid #fff9;border-radius:50%;background:rgba(232,238,235,.63);color:#40565c;box-shadow:0 2px 9px #36495416;display:grid;place-items:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+button:active{transform:scale(.95)}
+.speaker{width:25px;height:23px;position:relative}
+.speaker:before{content:"";position:absolute;left:2px;top:5px;width:12px;height:14px;background:currentColor;clip-path:polygon(0 33%,35% 33%,93% 0,93% 100%,35% 68%,0 68%)}
+.wave{position:absolute;top:6px;left:9px;width:10px;height:12px;border:1.7px solid transparent;border-right-color:currentColor;border-radius:50%}
+.wave+.wave{top:2.5px;left:9px;width:15px;height:19px}
+button[aria-pressed="true"] .wave{display:none}
+button[aria-pressed="true"] .speaker:after{content:"";position:absolute;left:16px;top:6px;height:14px;width:2px;background:currentColor;transform:rotate(39deg)}
+</style>
+</head>
+<body>
+<main><canvas id="valley" aria-label="雪の道と小さな除雪車"></canvas><button id="sound" type="button" aria-label="消音" aria-pressed="false"><span class="speaker" aria-hidden="true"><i class="wave"></i><i class="wave"></i></span></button></main>
+<script src="vendor/three.min.js"></script>
+<script src="simulation.js"></script>
+<script src="geometry.js"></script>
+<script src="landscape.js"></script>
+<script src="vehicles.js"></script>
+<script src="road.js"></script>
+<script src="sound.js"></script>
+<script src="main.js"></script>
+</body>
+</html>

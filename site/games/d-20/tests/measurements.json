@@ -1,0 +1,142 @@
+{
+  "step_s": 0.05,
+  "grid_cells": 3925,
+  "trials": {
+    "idle": {
+      "frames": 201,
+      "peakBank_m": 0,
+      "peakClods": 0,
+      "peakVolume_m3": 0,
+      "peakClodHeight_m": 0,
+      "peakLamp": 0,
+      "peakPitch_rad": 0.0003488019720744892,
+      "peakWheel_rad": 0,
+      "maxMassError_m3": 0,
+      "litAt_s": null,
+      "hintAt_s": 4.05,
+      "allWindowsAt_s": null
+    },
+    "20cm": {
+      "frames": 201,
+      "peakBank_m": 0.6271231288240267,
+      "peakClods": 15,
+      "peakVolume_m3": 5.913829192476383,
+      "peakClodHeight_m": 0.518718916560368,
+      "peakLamp": 0,
+      "peakPitch_rad": 0.030464769281514557,
+      "peakWheel_rad": 23.69322002248826,
+      "maxMassError_m3": 5.989235800016313e-14,
+      "litAt_s": null,
+      "hintAt_s": 8.05,
+      "allWindowsAt_s": null
+    },
+    "40cm": {
+      "frames": 201,
+      "peakBank_m": 0.8181699384936055,
+      "peakClods": 26,
+      "peakVolume_m3": 9.587560493144379,
+      "peakClodHeight_m": 0.519250295235258,
+      "peakLamp": 0,
+      "peakPitch_rad": 0.027414245634712932,
+      "peakWheel_rad": 19.65198253484929,
+      "maxMassError_m3": 1.2591403614203855e-13,
+      "litAt_s": null,
+      "hintAt_s": 8.05,
+      "allWindowsAt_s": null
+    },
+    "journey": {
+      "frames": 1001,
+      "peakBank_m": 0.6465055458631233,
+      "peakClods": 15,
+      "peakVolume_m3": 11.026689817345353,
+      "peakClodHeight_m": 0.518718916560368,
+      "peakLamp": 0.9999999999999991,
+      "peakPitch_rad": 0.06605543175199548,
+      "peakWheel_rad": 51.32743904171867,
+      "maxMassError_m3": 6.975886882032434e-14,
+      "litAt_s": 22,
+      "hintAt_s": 4.05,
+      "allWindowsAt_s": 22.9
+    }
+  },
+  "max": {
+    "snow_m": 0.08677205110490546,
+    "bank_m": 0.07761865865142231,
+    "water_mm": 0.0017458610519847928,
+    "temperature_C": 0.03125122549189907,
+    "window_fraction": 0.16748864603456848,
+    "suspension_m": 0.018000000000000002,
+    "wheel_rad": 0.5884126890935306,
+    "hand_m": 0.27613454241003765,
+    "flex_rad": 0.0022509054806589233,
+    "car_m": 0.15000001940081484,
+    "car_speed_m_s": 0.13000000000000034,
+    "car_pitch_rad": 0.01113888951039636,
+    "bus_m": 0.25500000000000256,
+    "bus_turn_rad": 0.05749718151071104,
+    "wind_m_s": 0.029028755590958077,
+    "blade_m": 0.0272297400996621,
+    "flake_m": 0.05789571942254042,
+    "clod_m": 0.16171727568779307
+  },
+  "events": [
+    [
+      "journey",
+      13.15,
+      "shine"
+    ],
+    [
+      "journey",
+      16.35,
+      "bus"
+    ],
+    [
+      "journey",
+      32.25,
+      "arrival"
+    ],
+    [
+      "journey",
+      33.55,
+      "refill"
+    ],
+    [
+      "journey",
+      45.1,
+      "plow"
+    ]
+  ],
+  "samples": 1604,
+  "particle_respawns": 506,
+  "uniform_nonzero_snow_steps": 0,
+  "idle": {
+    "film_growth_mm": 0.26487016430249316,
+    "umbrella_rad": 0.018726117042814384,
+    "wind_m_s": 0.6765981304457171,
+    "flake_fall_m": 1.2009207475931518,
+    "hintAt_s": 4.05
+  },
+  "depth_comparison": [
+    {
+      "t": 3,
+      "s": 5.786730551022308,
+      "v": 2.657136913313328,
+      "load": 24.479621328666934,
+      "wind": 0.7447606094932554,
+      "phase": "plow",
+      "hand": 0,
+      "coast_m": 1.363353453095387
+    },
+    {
+      "t": 3,
+      "s": 5.022135260132513,
+      "v": 2.211748715123992,
+      "load": 67.10046027410145,
+      "wind": 0.7447606094932554,
+      "phase": "plow",
+      "hand": 0,
+      "coast_m": 0.9534641619226951
+    }
+  ],
+  "next_depth_m": 0.264
+}
