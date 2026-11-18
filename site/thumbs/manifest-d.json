@@ -1,6 +1,10 @@
 {
- "d-21": {
-  "file": "thumbs/placeholder-d-21.svg",
+ "d-02": {
+  "file": "thumbs/placeholder-d-02.svg",
   "kind": "placeholder"
+ },
+ "d-21": {
+  "file": "thumbs/d-21.webp",
+  "kind": "real"
  }
 }

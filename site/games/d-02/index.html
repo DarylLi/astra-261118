@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+<meta name="robots" content="noindex,nofollow">
+    <meta charset="utf-8" />
+    <meta
+      name="viewport"
+      content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover"
+    />
+    <meta name="theme-color" content="#c5c6ae" />
+    <link rel="icon" href="data:," />
+    <title>ゴーカートで秋の山道</title>
+    <link rel="stylesheet" href="game.css" />
+  </head>
+  <body>
+    <canvas id="scene" aria-label="紅葉の山道のゴーカート"></canvas>
+    <div id="glass" aria-hidden="true"></div>
+    <div id="route" aria-label="コースの進み具合">
+      <svg viewBox="0 0 196 36" aria-hidden="true">
+        <path
+          d="M17 18H164"
+          stroke="#ded1ad"
+          stroke-opacity=".48"
+          stroke-width="2"
+          stroke-dasharray="2 4"
+          fill="none"
+        />
+        <path id="trail" d="M17 18H17" stroke="#f1cf83" stroke-width="2.5" fill="none" />
+        <g fill="#514d3d" stroke="#eac57c" stroke-width="2.3">
+          <circle class="gate" cx="44.56" cy="18" r="4.5" />
+          <circle class="gate" cx="76.72" cy="18" r="4.5" />
+          <circle class="gate" cx="124.95" cy="18" r="4.5" />
+        </g>
+        <circle id="pin" cx="17" cy="18" r="4.7" fill="#fcdf9d" stroke="#736446" stroke-width="1.2" />
+        <g transform="translate(164 7) rotate(7 5 10)">
+          <path d="M0 22V1" fill="none" stroke="#f3e8c8" stroke-width="2" stroke-linecap="round" />
+          <path d="M1 1Q5 -1 9 1T17 1V12Q13 14 9 12T1 12Z" fill="#e8e0cc" />
+          <path
+            d="M1 1Q3.3 0 5 0v5.3Q3.3 5.3 1 6Zm4 4.3q2 0 4 1v5.8q-2.2-1.1-4-1.1Zm4-4.3q2 1 4 1v5q-2 0-4-.9Zm4 6q2 0 4-.9V12q-2 1-4 1Z"
+            fill="#4b5146"
+          />
+        </g>
+      </svg>
+    </div>
+    <button id="sound" aria-label="音の切り替え" aria-pressed="true">
+      <svg viewBox="0 0 32 32" aria-hidden="true">
+        <path
+          d="M5.5 12.1h4.7l6-5.2c.6-.5 1.3-.2 1.3.6v17c0 .8-.8 1.1-1.3.6l-6-5.2H5.5c-.7 0-1.1-.4-1.1-1.2v-5.4c0-.7.4-1.2 1.1-1.2Z"
+          fill="currentColor"
+        />
+        <g class="waves" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round">
+          <path d="M21 11a7.5 7.5 0 0 1 0 10m3-14a12.5 12.5 0 0 1 0 18" />
+        </g>
+        <path
+          class="cross"
+          d="m21 12 7 8m0-8-7 8"
+          fill="none"
+          stroke="currentColor"
+          stroke-width="2"
+          stroke-linecap="round"
+        />
+      </svg>
+    </button>
+    <div id="gauge" aria-hidden="true"><canvas id="dial" width="288" height="288"></canvas></div>
+    <button id="pedal" aria-label="押してアクセル">
+      <svg class="pedal-art" viewBox="0 0 120 120" aria-hidden="true">
+        <defs>
+          <linearGradient id="b" x1="0" x2="1" y1="0" y2="1" gradientUnits="objectBoundingBox">
+            <stop stop-color="#fff0bd" />
+            <stop offset=".22" stop-color="#bfa572" />
+            <stop offset=".57" stop-color="#766342" />
+            <stop offset=".8" stop-color="#bda577" />
+            <stop offset="1" stop-color="#6c5a3f" />
+          </linearGradient>
+          <linearGradient id="rubber" x2=".85" y2="1">
+            <stop stop-color="#787666" />
+            <stop offset=".48" stop-color="#514f44" />
+            <stop offset="1" stop-color="#3d3d34" />
+          </linearGradient>
+          <linearGradient id="rib" x2="0" y2="1">
+            <stop stop-color="#aaa58b" />
+            <stop offset=".32" stop-color="#7b7966" />
+            <stop offset=".76" stop-color="#666557" />
+            <stop offset="1" stop-color="#4b4b40" />
+          </linearGradient>
+        </defs>
+        <g class="plate" transform="rotate(13 60 60)">
+          <rect
+            x="33"
+            y="14"
+            width="54"
+            height="93"
+            rx="17"
+            fill="#34342b"
+            stroke="#35342b"
+            stroke-width="3"
+          />
+          <rect
+            x="32"
+            y="10"
+            width="55"
+            height="91"
+            rx="16"
+            fill="url(#b)"
+            stroke="#e1cca2"
+            stroke-width="1.15"
+          />
+          <rect
+            x="36"
+            y="14"
+            width="47"
+            height="83"
+            rx="12"
+            fill="url(#rubber)"
+            stroke="#595340"
+            stroke-width="1.1"
+          />
+          <g fill="none" stroke="#f2d191" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+            <path d="m51 33 8-6 8 6m-16 7 8-6 8 6" />
+          </g>
+          <g fill="url(#rib)" stroke="#36372f" stroke-width=".9">
+            <rect x="41" y="48" width="37" height="5.8" rx="2.4" />
+            <rect x="41" y="59" width="37" height="5.8" rx="2.4" />
+            <rect x="41" y="70" width="37" height="5.8" rx="2.4" />
+            <rect x="42" y="81" width="35" height="5.8" rx="2.4" />
+          </g>
+        </g>
+      </svg>
+      <svg class="horn-art" viewBox="0 0 64 64" aria-hidden="true">
+        <path d="M19 34q10-1 22-15l8 23q-15-5-25-1Z" fill="#d9b777" stroke="#f8e5b5" stroke-width="2" />
+        <path d="m41 19 8 23" stroke="#f6dea7" stroke-width="5" stroke-linecap="round" />
+        <ellipse
+          cx="17"
+          cy="40"
+          rx="9"
+          ry="7"
+          transform="rotate(-19 17 40)"
+          fill="#8e5541"
+          stroke="#d5b99b"
+          stroke-width="1.4"
+        />
+        <path d="m48 15 4-5m0 12 6-2" stroke="#f3d28f" fill="none" stroke-width="3" stroke-linecap="round" />
+      </svg>
+    </button>
+    <div id="hand" aria-hidden="true">
+      <svg viewBox="0 0 64 74">
+        <path
+          d="M22 37V10c0-7 10-7 10 0v19-9c0-6 9-6 9 0v10-6c0-6 8-6 8 0v9-4c0-6 8-6 8 0v20c0 7-5 18-11 20H29c-5-2-10-8-13-14L6 38c-3-6 4-10 8-6l8 9Z"
+          fill="#fff2cc"
+          stroke="#7b6849"
+          stroke-width="2.5"
+          stroke-linejoin="round"
+        />
+      </svg>
+    </div>
+    <div id="veil"></div>
+    <script src="vendor/three.min.js"></script>
+    <script src="physics.js"></script>
+    <script src="art.js"></script>
+    <script src="kart.js"></script>
+    <script src="valley.js"></script>
+    <script src="forest.js"></script>
+    <script src="game.js"></script>
+  </body>
+</html>
