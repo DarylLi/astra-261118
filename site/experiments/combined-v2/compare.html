@@ -1,0 +1,21 @@
+<!doctype html><html lang="ja"><head><meta charset="utf-8"><meta name="robots" content="noindex,nofollow">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>combined-v2 A/B/C</title>
+<style>body{margin:0;background:#f3efe6;font:16px/1.5 system-ui,sans-serif;color:#333}main{max-width:1400px;margin:0 auto;padding:16px}
+.row{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:0 0 10px}@media(max-width:700px){.row{grid-template-columns:1fr}}
+figure{margin:0;position:relative}img{width:100%;display:block;border-radius:12px;box-shadow:0 4px 14px rgba(0,0,0,.18)}
+figcaption{position:absolute;left:8px;top:8px;background:rgba(255,255,255,.9);padding:2px 12px;border-radius:10px;font-weight:700}
+a.btn{display:inline-block;margin:4px 8px 16px 0;padding:10px 18px;border-radius:14px;background:#fff;color:#333;text-decoration:none;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.15)}
+table{border-collapse:collapse;width:100%;background:#fff;font-size:14px;margin-top:14px}td,th{border:1px solid #ddd;padding:6px 8px;text-align:left}</style></head><body><main>
+<a class="btn" href="A/">A 今の指示文</a><a class="btn" href="B/">B 新指示文v1</a><a class="btn" href="C/">C 新指示文v2</a>
+<div class="row"><figure><figcaption>A</figcaption><img src="shots/A_start.jpg"></figure><figure><figcaption>B</figcaption><img src="shots/B_start.jpg"></figure><figure><figcaption>C</figcaption><img src="shots/C_start.jpg"></figure></div>
+<div class="row"><figure><figcaption>A</figcaption><img src="shots/A_drag.jpg"></figure><figure><figcaption>B 注ぐ</figcaption><img src="shots/B_pour.jpg"></figure><figure><figcaption>C 注ぐ</figcaption><img src="shots/C_pour.jpg"></figure></div>
+<div class="row"><figure><figcaption>B 焼く</figcaption><img src="shots/B_cook.jpg"></figure><figure><figcaption>C 焼く(約8秒)</figcaption><img src="shots/C_cook.jpg"></figure><figure><figcaption>C 返した</figcaption><img src="shots/C_flip.jpg"></figure></div>
+<div class="row"><figure><figcaption>B バター</figcaption><img src="shots/B_butter.jpg"></figure><figure><figcaption>C バター</figcaption><img src="shots/C_butter.jpg"></figure><figure><figcaption>C 苺</figcaption><img src="shots/C_syrup_berry.jpg"></figure></div>
+<div class="row"><figure><figcaption>B 苺</figcaption><img src="shots/B_syrup_berry.jpg"></figure><figure><figcaption>B 食べる</figcaption><img src="shots/B_eat.jpg"></figure><figure><figcaption>C 食べる</figcaption><img src="shots/C_eat.jpg"></figure></div>
+<div class="row"><figure><figcaption>A 縦</figcaption><img src="shots/A_phone.jpg"></figure><figure><figcaption>B 縦</figcaption><img src="shots/B_phone.jpg"></figure><figure><figcaption>C 縦</figcaption><img src="shots/C_phone.jpg"></figure></div>
+<table><tr><th></th><th>A</th><th>B</th><th>C</th></tr>
+<tr><td>指示文の字数</td><td>18,387</td><td>1,176</td><td>1,625</td></tr>
+<tr><td>彩度中央値(HSV 0-100, 全スクショ)</td><td>28.6</td><td>11.4 (7〜19)</td><td>24.3 (22〜26)</td></tr>
+<tr><td>人物がフレームで切れる</td><td>上半身で自然</td><td>あり</td><td>なし(全身が入る)</td></tr>
+<tr><td>焼き色 薄い黄金→濃い茶</td><td>未計測</td><td>4秒で29%、10秒で71%(速すぎ)</td><td>7.9秒→14.7秒(4秒では0.6%)</td></tr></table>
+</main></body></html>
