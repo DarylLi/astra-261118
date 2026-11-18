@@ -1,0 +1,90 @@
+{
+  "stepSeconds": 0.05,
+  "idle": {
+    "durationS": 10,
+    "firstGuideS": 4.05,
+    "peakDustDriftM": 0.051832351310846916,
+    "peakHemDeflectionM": 0.002118463610998654,
+    "peakBellRad": 0.000693272330218462
+  },
+  "comparison": [
+    {
+      "compressionM": 0.01,
+      "forceN": 2,
+      "speedMps": 0.22078296900572986,
+      "contacts": 12,
+      "cup": 1,
+      "timeToCupS": 2.2500000000000324,
+      "peakPinM": 0.0006599276050599786
+    },
+    {
+      "compressionM": 0.04,
+      "forceN": 8,
+      "speedMps": 0.8487560959708985,
+      "contacts": 17,
+      "cup": 2,
+      "timeToCupS": 2.0000000000000466,
+      "peakPinM": 0.001057860601701185
+    }
+  ],
+  "restitution": 0.5499999999999999,
+  "cycle": {
+    "rounds": 2,
+    "chimes": 6,
+    "loadOrder": [
+      [
+        0,
+        1,
+        2
+      ],
+      [
+        3,
+        4,
+        5
+      ]
+    ],
+    "firstResetS": 32.00000000001198,
+    "peakForceN": 8,
+    "peakWindmillRadS": 8.46171181716182,
+    "peakBellRad": 0.0656308938565976,
+    "peakLidRad": 1.1265047180902628,
+    "peakBasketRad": 0.08725309591401263,
+    "peakPinM": 0.0025792788420134533,
+    "rewardSeconds": 19.850000000011235,
+    "wheelTravelRad": 9.423866563671146
+  },
+  "maxAdjacent": {
+    "ballM": 0.0850031355376388,
+    "leverM": 0.039420816546385476,
+    "pinM": 0.002618391084122267,
+    "dustM": 0.0006388285223566078,
+    "clothM": 0.00013159382061518583,
+    "guideFraction": 0.12176352091916098,
+    "wheelRad": 0.05440661585535622,
+    "basketRad": 0.022475472467085464,
+    "windmillRad": 0.4087777637340535,
+    "bellRad": 0.0390778741122699,
+    "lidRad": 0.14807385154858244,
+    "lipRad": 0.045184602590478865,
+    "ballSpinRad": 10.162730328518904
+  },
+  "uniformity": {
+    "movingCloth": 1541,
+    "uniformCloth": 0,
+    "movingDust": 1541,
+    "uniformDust": 0,
+    "pinEvents": 493,
+    "framesWithAllPinsDisplaced": 0,
+    "allEqualChanges": {
+      "windmills": 0,
+      "bells": 0,
+      "gates": 0,
+      "baskets": 0
+    }
+  },
+  "substep": {
+    "maxBallTravelM": 0.003812471658120074,
+    "maxLeverTravelM": 0.00212270952868154
+  },
+  "sampleCount": 1545
+}
