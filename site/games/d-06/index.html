@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#3b344e">
+<title>ブロックの町をたてる</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#51435b;touch-action:none;user-select:none;-webkit-user-select:none}
+#world{position:fixed;inset:0;width:100%;height:100%;display:block;outline:0}
+#top{position:fixed;inset:max(22px,env(safe-area-inset-top)) max(24px,env(safe-area-inset-right)) auto max(24px,env(safe-area-inset-left));display:flex;align-items:center;justify-content:space-between;pointer-events:none}
+.panel{border:1px solid #fff0cc49;box-shadow:inset 0 1px 0 #fff6dc1c,0 3px 9px #24132725;background:linear-gradient(140deg,#393544c9,#423849d6);color:#fff0d0}
+#progress{display:flex;align-items:center;gap:12px;height:43px;padding:0 16px 0 11px;border-radius:24px}
+#housemark{width:25px;height:25px;color:#ffdda9}
+#dots{display:flex;gap:7px}
+#dots i{width:9px;height:9px;border-radius:50%;background:#27253078;border:1px solid #c9b3a080;box-shadow:inset 0 1px 2px #2d283921;transition:background .4s,box-shadow .4s}
+#dots i.on{background:#ffda91;border-color:#ffdfa5;box-shadow:0 0 8px #ffbb6380}
+#sound{border-radius:50%;width:43px;height:43px;display:grid;place-items:center;pointer-events:auto;cursor:pointer}
+#sound svg{height:23px;width:23px}
+#muteLine{display:none}
+#sound.muted #muteLine{display:block}
+#sound.muted #wave{display:none}
+#journey{position:fixed;bottom:max(20px,env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);display:flex;align-items:center;height:45px;padding:3px 7px;border-radius:30px;pointer-events:none;gap:4px}
+.stage{height:33px;width:39px;display:grid;place-items:center;color:#d1bdab9e;transition:color .5s,background .5s;border-radius:20px}
+.stage svg{width:24px;height:24px}
+.stage.active{color:#ffe5b6;background:#ffe4b421}
+.join{height:2px;width:9px;border-radius:3px;background:#b9a38e65}
+#hand{position:fixed;width:46px;height:49px;left:0;top:0;pointer-events:none;opacity:0;filter:drop-shadow(0 3px 3px #39203955);transform-origin:5px 4px}
+@media(max-width:520px){#top{left:15px;right:15px;top:max(17px,env(safe-area-inset-top))}#journey{bottom:max(28px,env(safe-area-inset-bottom))}#progress{height:39px}#sound{height:40px;width:40px}}
+</style>
+</head>
+<body>
+<canvas id="world" aria-label="木のブロックで町をたてる"></canvas>
+<svg style="display:none" xmlns="http://www.w3.org/2000/svg"><defs>
+<symbol id="home-icon" viewBox="0 0 28 28"><path d="m3 13 11-9 11 9-2 2-9-7.3L5 15z" fill="currentColor"/><path fill="currentColor" fill-rule="evenodd" d="m6.4 15 7.6-6.2 7.6 6.2v9H6.4zm5.4.6v4.2h4.4v-4.2z"/><path fill="currentColor" d="M19.2 5.1h3v6l-3-2.4z"/></symbol>
+<symbol id="lamp-icon" viewBox="0 0 28 28"><g stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round" fill="none"><path d="M14 3v2m-6 3 6-4 6 4zM9.5 10l1.5 7h6l1.5-7zM14 18v6m-4 1h8"/></g></symbol>
+<symbol id="train-icon" viewBox="0 0 28 28"><g fill="currentColor"><path fill-rule="evenodd" d="M2 6h10v10h6v-4h-1V9h5v3h-1v4h2l3 5H2zm3 2v5h4V8z"/><circle cx="7" cy="23" r="2.3"/><circle cx="14" cy="23" r="2.3"/><circle cx="21" cy="23" r="2.3"/></g></symbol>
+</defs></svg>
+<div id="top"><div class="panel" id="progress"><svg id="housemark" viewBox="0 0 28 28"><use href="#home-icon"/></svg><div id="dots"><i></i><i></i><i></i><i></i><i></i><i></i></div></div>
+<button class="panel" id="sound" aria-label="音を切り替える" aria-pressed="true"><svg viewBox="0 0 26 26"><path d="M3 10h4l6-5v16l-6-5H3z" fill="currentColor"/><g fill="none" stroke="currentColor" stroke-linecap="round" stroke-width="1.8"><path id="wave" d="M16.4 8.8q4.4 4.2 0 8.4m3.1-11.3q7.1 7.1 0 14.2"/><path id="muteLine" d="m17 10 6 6m0-6-6 6"/></g></svg></button></div>
+<div id="journey" class="panel" aria-hidden="true"><span class="stage active"><svg><use href="#home-icon"/></svg></span><b class="join"></b><span class="stage"><svg><use href="#lamp-icon"/></svg></span><b class="join"></b><span class="stage"><svg><use href="#train-icon"/></svg></span></div>
+<svg id="hand" aria-hidden="true" viewBox="0 0 46 49"><path d="M12 25 4.5 9.4C2 4.2 7.2 1.1 10 6.1l7.1 12.1-2.3-5.4c-1.9-4.9 3.5-7 6-2.6l2.6 4.6-.9-2.4c-1.5-4.1 3.8-6.1 6-2.2l2.6 4.9c-1-3.9 3.9-5.1 5.8-1.3l4.5 9.5c2.8 6.3 1 11-2.6 15.4l-1.1 3.7-13.3 4.1-3.7-4.7-14-9.4c-4.1-3-1.3-7.9 3.1-6.2l6 2.7z" fill="#fff5dc" stroke="#796253" stroke-width="1.7" stroke-linejoin="round"/></svg>
+<script src="vendor/three.min.js"></script><script src="simulation.js"></script><script src="craft.js"></script><script src="town.js"></script><script src="game.js"></script>
+</body></html>
