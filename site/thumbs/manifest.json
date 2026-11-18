@@ -98,5 +98,9 @@
   "25": {
     "file": "thumbs/astra-261118-25.webp",
     "kind": "real"
+  },
+  "27": {
+    "file": "thumbs/placeholder-27.svg",
+    "kind": "placeholder"
   }
 }
