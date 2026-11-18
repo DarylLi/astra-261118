@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta name="robots" content="noindex,nofollow">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="theme-color" content="#9ebbc3">
+<title>グライダーで気球のあいだを</title>
+<style>
+:root{color-scheme:light;--ink:#3e5554;--ivory:#fff8e6;--rim:rgba(255,249,224,.81)}
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body,#world{width:100%;height:100%;margin:0;overflow:hidden;overscroll-behavior:none;touch-action:none}
+body{background:#b2c6ce;user-select:none;-webkit-user-select:none}
+#world{position:fixed;inset:0;display:block}
+canvas{display:block}
+#instruments{position:fixed;inset:0;pointer-events:none}
+.top{position:absolute;top:max(22px,env(safe-area-inset-top));left:max(24px,env(safe-area-inset-left));right:max(24px,env(safe-area-inset-right));display:flex;align-items:center;justify-content:space-between}
+.cluster{display:flex;gap:9px}
+button{font:inherit;color:var(--ink);cursor:pointer;appearance:none;-webkit-appearance:none;padding:0;outline-offset:4px}
+.instrument{background:linear-gradient(150deg,rgba(255,251,230,.90),rgba(249,242,218,.78));border:1px solid var(--rim);box-shadow:0 3px 13px #304a4b24,inset 0 -1px 1px #867a612b;color:var(--ink);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px)}
+.icon{position:relative;pointer-events:auto;border-radius:50%;width:43px;height:43px;display:grid;place-items:center}
+.icon:active{transform:translateY(1px)}
+.icon svg{width:21px;height:21px;fill:none;stroke:currentColor;stroke-width:1.65;stroke-linecap:round;stroke-linejoin:round}
+.progress{display:flex;align-items:center;height:40px;padding:0 14px 0 11px;gap:10px;border-radius:24px}
+.progress>svg{height:25px;width:20px;color:#7b5e43;stroke-width:1.45;stroke:currentColor;fill:none;stroke-linecap:round;stroke-linejoin:round}
+#pips{display:flex;align-items:center;gap:3px}
+#pips i{width:3px;height:6px;border-radius:3px;background:#687b7142;transition:background .4s,height .4s}
+#pips i:nth-child(5n):not(:last-child){margin-right:2px}
+#pips i.passed{background:#ad7952;height:11px}
+#pips i.next{background:#ac8b5e;height:9px}
+#steer{position:absolute;left:50%;bottom:max(24px,calc(env(safe-area-inset-bottom) + 9px));transform:translateX(-50%);pointer-events:auto;touch-action:none;width:88px;height:88px;border:1px solid #fffae4ae;border-radius:50%;
+background:radial-gradient(circle,#e8e8d62b 45%,#42575224 66%,#f5f1d94f 69%,#f8f0d66b 97%);box-shadow:0 3px 18px #293e3c29,inset 0 0 0 5px #fbf7e821;transition:opacity .6s;cursor:grab}
+#steer:active{cursor:grabbing}
+#steer .marks{position:absolute;inset:0;width:100%;height:100%;fill:#fff8dc;filter:drop-shadow(0 1px 1px #3c504f45)}
+#knob{position:absolute;left:50%;top:50%;width:42px;height:42px;border-radius:50%;display:grid;place-items:center;transform:translate(-50%,-50%);
+background:linear-gradient(145deg,#fff9e9e8,#ece6cde3);border:1px solid #fffbe9d9;box-shadow:0 2px 7px #34494247;color:#53655d}
+#knob svg{width:24px;height:24px;fill:currentColor}
+#hand{position:absolute;left:0;top:0;opacity:0;width:44px;height:52px;filter:drop-shadow(0 2px 4px #30434b55);will-change:transform;pointer-events:none}
+#veil{position:absolute;inset:0;background:#f1dfca;opacity:0;pointer-events:none}
+#paused{display:none;position:absolute;inset:0;place-items:center;background:#273e402b;pointer-events:auto;backdrop-filter:blur(2px);-webkit-backdrop-filter:blur(2px)}
+#resume{width:76px;height:76px}#resume svg{width:29px;height:29px}
+body.rest #paused{display:grid}body.rest #hand{visibility:hidden}
+body.arriving #steer,body.arriving #hand{visibility:hidden}
+body.quiet .waves,body:not(.quiet) .mute{display:none}
+@media(max-width:580px){.top{top:max(16px,env(safe-area-inset-top));left:max(15px,env(safe-area-inset-left));right:max(15px,env(safe-area-inset-right))}.icon{width:40px;height:40px}.cluster{gap:7px}.progress{height:37px;padding-right:11px;gap:7px}#pips{gap:2px}#steer{width:82px;height:82px}}
+@media(max-height:480px){.top{top:10px}#steer{width:66px;height:66px;bottom:10px}}
+</style>
+</head>
+<body>
+<canvas id="world" aria-label="朝の高原を飛ぶグライダー"></canvas>
+<div id="instruments">
+  <div class="top">
+    <div class="progress instrument" role="progressbar" aria-label="訪ねた気球" aria-valuemin="0" aria-valuemax="20" aria-valuenow="0">
+      <svg viewBox="0 0 24 30" aria-hidden="true"><path d="M8.6 20.7C7.6 18 2.1 14.2 2.1 9.9A9.9 9.9 0 0 1 21.9 10c0 4.3-5.5 8.3-6.5 10.7z"/><path d="M9.6 20.4C8.1 16.2 7 14.3 7 10c0-4.4 2.5-8.9 5-9.3C14.4 1.2 17 5.6 17 10s-1.3 6.6-2.7 10.4M8.7 21l1.2 3.1m5.4-3.1-1.2 3.1M9.5 24.2h5l-.5 3.2h-4z"/></svg>
+      <div id="pips"></div>
+    </div>
+    <div class="cluster">
+      <button class="icon instrument" id="sound" type="button" aria-label="音の切り替え" aria-pressed="true">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 9h4l5-4.2v14.4L7.5 15h-4z"/><g class="waves"><path d="M16 8.3a5.2 5.2 0 0 1 0 7.4m2.7-10a8.9 8.9 0 0 1 0 12.6"/></g><path class="mute" d="m16.5 9 5.2 6m0-6-5.2 6"/></svg>
+      </button>
+      <button class="icon instrument" id="pause" type="button" aria-label="ひと休み"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.3 5.8v12.4m7.4-12.4v12.4" stroke-width="3.3"/></svg></button>
+    </div>
+  </div>
+  <div id="steer" role="slider" aria-label="操縦かん" aria-valuemin="-1" aria-valuemax="1" aria-valuenow="0" tabindex="0">
+    <svg class="marks" viewBox="0 0 88 88" aria-hidden="true"><path d="m44 7-3.1 4.4h6.2zm0 74 3.1-4.4h-6.2zM7 44l4.4 3.1v-6.2zm74 0-4.4-3.1v6.2z"/></svg>
+    <div id="knob"><svg viewBox="0 0 32 32" aria-hidden="true"><path d="M15.1 4.1q.9-1.7 1.8 0l.9 8.1 11.4 5.3v2.1l-11.7-2.7-.4 7.3 3.7 2.3v1.5L16 26.9l-4.8 1.1v-1.5l3.7-2.3-.4-7.3-11.7 2.7v-2.1l11.4-5.3z"/></svg></div>
+  </div>
+  <svg id="hand" viewBox="0 0 45 54" aria-hidden="true"><path d="M12 34 5 17q-2-5 2-6 3-1 5 3l5 10-5-18q-1-4 2-5 3-1 5 4l5 16-1-7q0-4 3-4t4 4l1 6v-4q0-3 3-3t3 4l1 6q1-4 4-3 3 0 2 6l-1 11q-1 6-5 10l-2 3-15-4-2-5z" fill="#fff5db" stroke="#887d62" stroke-width="1.3" stroke-linejoin="round"/></svg>
+  <div id="paused"><button class="icon instrument" id="resume" type="button" aria-label="飛行を続ける"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 4 13 8-13 8z" fill="currentColor" stroke-width="1"/></svg></button></div>
+  <div id="veil"></div>
+</div>
+<script src="vendor/three.min.js"></script>
+<script src="flight.js"></script><script src="models.js"></script><script src="valley.js"></script><script src="game.js"></script>
+</body>
+</html>
